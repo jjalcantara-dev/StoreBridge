@@ -1,0 +1,54 @@
+<Project>
+
+  <!-- Shared build + packaging configuration for the three published libraries.
+       Located in src/ so it does not apply to the test projects under tests/. -->
+  <PropertyGroup>
+    <!-- Common build settings -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+
+    <!-- Shared package metadata (PackageId, Description, PackageTags stay per-project) -->
+    <Version>0.1.0</Version>
+    <Authors>Jesus Jimenez</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/jjalcantara-dev/StoreBridge</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jjalcantara-dev/StoreBridge</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Symbol packages for debugging consumers -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- SourceLink: embed repo info and untracked sources so consumers can step into the source -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+
+    <!-- NuGet page content -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+
+  <!-- A normalized, path-independent build is only correct on CI -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true' or '$(CI)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <!-- Tracks the public API surface; changes must be reflected in PublicAPI.*.txt -->
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\assets\icon.png" Pack="true" PackagePath="\" Visible="false" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)\PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)\PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+</Project>

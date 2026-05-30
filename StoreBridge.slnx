@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/StoreBridge.Android/StoreBridge.Android.csproj" />
+    <Project Path="src/StoreBridge.Apple/StoreBridge.Apple.csproj" />
+    <Project Path="src/StoreBridge/StoreBridge.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/StoreBridge.Android.Tests/StoreBridge.Android.Tests.csproj" />
+    <Project Path="tests/StoreBridge.Apple.Tests/StoreBridge.Apple.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/StoreBridge.Sample.Web/StoreBridge.Sample.Web.csproj" />
+  </Folder>
+</Solution>

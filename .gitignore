@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+nupkgs/
+nupkgs-test/
+*.nupkg
+*.snupkg
+.claude/settings.local.json

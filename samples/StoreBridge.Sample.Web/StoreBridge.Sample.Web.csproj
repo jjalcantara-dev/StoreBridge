@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StoreBridge.Apple\StoreBridge.Apple.csproj" />
+    <ProjectReference Include="..\..\src\StoreBridge.Android\StoreBridge.Android.csproj" />
+  </ItemGroup>
+
+</Project>

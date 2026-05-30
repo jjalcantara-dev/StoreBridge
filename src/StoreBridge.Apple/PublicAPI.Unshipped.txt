@@ -1,0 +1,54 @@
+#nullable enable
+const StoreBridge.Apple.AppleInAppPurchaseVerifier.HttpClientName = "StoreBridge.Apple.Transactions" -> string!
+const StoreBridge.Apple.AppleSubscriptionVerifier.HttpClientName = "StoreBridge.Apple.Subscriptions" -> string!
+StoreBridge.Apple.AppleApiOptions
+StoreBridge.Apple.AppleApiOptions.AppleApiOptions() -> void
+StoreBridge.Apple.AppleApiOptions.BundleId.get -> string!
+StoreBridge.Apple.AppleApiOptions.BundleId.set -> void
+StoreBridge.Apple.AppleApiOptions.IssuerId.get -> string!
+StoreBridge.Apple.AppleApiOptions.IssuerId.set -> void
+StoreBridge.Apple.AppleApiOptions.KeyId.get -> string!
+StoreBridge.Apple.AppleApiOptions.KeyId.set -> void
+StoreBridge.Apple.AppleApiOptions.MaxRetries.get -> int
+StoreBridge.Apple.AppleApiOptions.MaxRetries.set -> void
+StoreBridge.Apple.AppleApiOptions.PrivateKeyBase64.get -> string!
+StoreBridge.Apple.AppleApiOptions.PrivateKeyBase64.set -> void
+StoreBridge.Apple.AppleInAppPurchaseOptions
+StoreBridge.Apple.AppleInAppPurchaseOptions.AppleInAppPurchaseOptions() -> void
+StoreBridge.Apple.AppleInAppPurchaseOptions.TransactionsBaseUrl.get -> string!
+StoreBridge.Apple.AppleInAppPurchaseOptions.TransactionsBaseUrl.set -> void
+StoreBridge.Apple.AppleInAppPurchaseVerifier
+StoreBridge.Apple.AppleInAppPurchaseVerifier.AppleInAppPurchaseVerifier(StoreBridge.Apple.AppleInAppPurchaseOptions! options, System.Net.Http.HttpClient? httpClient = null, Microsoft.Extensions.Logging.ILogger<StoreBridge.Apple.AppleInAppPurchaseVerifier!>? logger = null) -> void
+StoreBridge.Apple.AppleInAppPurchaseVerifier.Dispose() -> void
+StoreBridge.Apple.AppleInAppPurchaseVerifier.Store.get -> StoreBridge.Store
+StoreBridge.Apple.AppleInAppPurchaseVerifier.VerifyPurchaseAsync(string! purchaseToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
+StoreBridge.Apple.AppleInAppPurchaseWebhookParser
+StoreBridge.Apple.AppleInAppPurchaseWebhookParser.AppleInAppPurchaseWebhookParser() -> void
+StoreBridge.Apple.AppleInAppPurchaseWebhookParser.ParseAsync(string! rawBody, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseNotification!>!
+StoreBridge.Apple.AppleInAppPurchaseWebhookParser.Store.get -> StoreBridge.Store
+StoreBridge.Apple.AppleServiceCollectionExtensions
+StoreBridge.Apple.AppleSubscriptionOptions
+StoreBridge.Apple.AppleSubscriptionOptions.AppleSubscriptionOptions() -> void
+StoreBridge.Apple.AppleSubscriptionOptions.SubscriptionsBaseUrl.get -> string!
+StoreBridge.Apple.AppleSubscriptionOptions.SubscriptionsBaseUrl.set -> void
+StoreBridge.Apple.AppleSubscriptionVerifier
+StoreBridge.Apple.AppleSubscriptionVerifier.AppleSubscriptionVerifier(StoreBridge.Apple.AppleSubscriptionOptions! options, System.Net.Http.HttpClient? httpClient = null, Microsoft.Extensions.Logging.ILogger<StoreBridge.Apple.AppleSubscriptionVerifier!>? logger = null) -> void
+StoreBridge.Apple.AppleSubscriptionVerifier.Dispose() -> void
+StoreBridge.Apple.AppleSubscriptionVerifier.Store.get -> StoreBridge.Store
+StoreBridge.Apple.AppleSubscriptionVerifier.VerifySubscriptionAsync(string! receiptOrToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.SubscriptionVerificationResult!>!
+StoreBridge.Apple.AppleWebhookAuthenticator
+StoreBridge.Apple.AppleWebhookAuthenticator.AppleWebhookAuthenticator() -> void
+StoreBridge.Apple.AppleWebhookAuthenticator.AppleWebhookAuthenticator(byte[]! trustedRootDer) -> void
+StoreBridge.Apple.AppleWebhookAuthenticator.AppleWebhookAuthenticator(System.Collections.Generic.IEnumerable<byte[]!>! trustedRootsDer) -> void
+StoreBridge.Apple.AppleWebhookAuthenticator.Dispose() -> void
+StoreBridge.Apple.AppleWebhookAuthenticator.Store.get -> StoreBridge.Store
+StoreBridge.Apple.AppleWebhookAuthenticator.ValidateAsync(string! rawBody, string? bearerToken = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+StoreBridge.Apple.AppleWebhookParser
+StoreBridge.Apple.AppleWebhookParser.AppleWebhookParser() -> void
+StoreBridge.Apple.AppleWebhookParser.ParseAsync(string! rawBody, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.SubscriptionNotification!>!
+StoreBridge.Apple.AppleWebhookParser.Store.get -> StoreBridge.Store
+static StoreBridge.Apple.AppleServiceCollectionExtensions.AddAppleInAppPurchases(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static StoreBridge.Apple.AppleServiceCollectionExtensions.AddAppleInAppPurchases(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Apple.AppleInAppPurchaseOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static StoreBridge.Apple.AppleServiceCollectionExtensions.AddAppleSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static StoreBridge.Apple.AppleServiceCollectionExtensions.AddAppleSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Apple.AppleSubscriptionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static StoreBridge.Apple.AppleServiceCollectionExtensions.AddAppleWebhooks(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

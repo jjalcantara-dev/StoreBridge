@@ -1,0 +1,163 @@
+#nullable enable
+StoreBridge.IInAppPurchaseVerifier
+StoreBridge.IInAppPurchaseVerifier.Store.get -> StoreBridge.Store
+StoreBridge.IInAppPurchaseVerifier.VerifyPurchaseAsync(string! purchaseToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
+StoreBridge.IInAppPurchaseWebhookParser
+StoreBridge.IInAppPurchaseWebhookParser.ParseAsync(string! rawBody, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseNotification!>!
+StoreBridge.IInAppPurchaseWebhookParser.Store.get -> StoreBridge.Store
+StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.Cancelled = 2 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.ConsumptionRequest = 3 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.Other = 5 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.Purchased = 0 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.Refunded = 1 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.Test = 4 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseNotification
+StoreBridge.InAppPurchaseNotification.EventAt.get -> System.DateTimeOffset?
+StoreBridge.InAppPurchaseNotification.EventAt.init -> void
+StoreBridge.InAppPurchaseNotification.EventType.get -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseNotification.EventType.init -> void
+StoreBridge.InAppPurchaseNotification.InAppPurchaseNotification() -> void
+StoreBridge.InAppPurchaseNotification.IsSandbox.get -> bool
+StoreBridge.InAppPurchaseNotification.IsSandbox.init -> void
+StoreBridge.InAppPurchaseNotification.NotificationId.get -> string!
+StoreBridge.InAppPurchaseNotification.NotificationId.init -> void
+StoreBridge.InAppPurchaseNotification.ProductId.get -> string!
+StoreBridge.InAppPurchaseNotification.ProductId.init -> void
+StoreBridge.InAppPurchaseNotification.PurchaseId.get -> string!
+StoreBridge.InAppPurchaseNotification.PurchaseId.init -> void
+StoreBridge.InAppPurchaseNotification.RawEventType.get -> string!
+StoreBridge.InAppPurchaseNotification.RawEventType.init -> void
+StoreBridge.InAppPurchaseNotification.Store.get -> StoreBridge.Store
+StoreBridge.InAppPurchaseNotification.Store.init -> void
+StoreBridge.InAppPurchaseVerificationResult
+StoreBridge.InAppPurchaseVerificationResult.CurrencyCode.get -> string!
+StoreBridge.InAppPurchaseVerificationResult.CurrencyCode.init -> void
+StoreBridge.InAppPurchaseVerificationResult.ErrorMessage.get -> string?
+StoreBridge.InAppPurchaseVerificationResult.ErrorMessage.init -> void
+StoreBridge.InAppPurchaseVerificationResult.InAppPurchaseVerificationResult() -> void
+StoreBridge.InAppPurchaseVerificationResult.IsAcknowledged.get -> bool
+StoreBridge.InAppPurchaseVerificationResult.IsAcknowledged.init -> void
+StoreBridge.InAppPurchaseVerificationResult.IsSandbox.get -> bool
+StoreBridge.InAppPurchaseVerificationResult.IsSandbox.init -> void
+StoreBridge.InAppPurchaseVerificationResult.IsVerified.get -> bool
+StoreBridge.InAppPurchaseVerificationResult.IsVerified.init -> void
+StoreBridge.InAppPurchaseVerificationResult.PriceAmount.get -> long
+StoreBridge.InAppPurchaseVerificationResult.PriceAmount.init -> void
+StoreBridge.InAppPurchaseVerificationResult.PriceDecimal.get -> decimal
+StoreBridge.InAppPurchaseVerificationResult.PriceDecimal.init -> void
+StoreBridge.InAppPurchaseVerificationResult.ProductId.get -> string!
+StoreBridge.InAppPurchaseVerificationResult.ProductId.init -> void
+StoreBridge.InAppPurchaseVerificationResult.PurchasedAt.get -> System.DateTimeOffset?
+StoreBridge.InAppPurchaseVerificationResult.PurchasedAt.init -> void
+StoreBridge.InAppPurchaseVerificationResult.PurchaseId.get -> string!
+StoreBridge.InAppPurchaseVerificationResult.PurchaseId.init -> void
+StoreBridge.InAppPurchaseVerificationResult.Quantity.get -> int
+StoreBridge.InAppPurchaseVerificationResult.Quantity.init -> void
+StoreBridge.InAppPurchaseVerificationResult.Status.get -> StoreBridge.PurchaseStatus
+StoreBridge.InAppPurchaseVerificationResult.Status.init -> void
+StoreBridge.InAppPurchaseVerificationResult.Store.get -> StoreBridge.Store
+StoreBridge.InAppPurchaseVerificationResult.Store.init -> void
+StoreBridge.ISubscriptionVerifier
+StoreBridge.ISubscriptionVerifier.Store.get -> StoreBridge.Store
+StoreBridge.ISubscriptionVerifier.VerifySubscriptionAsync(string! receiptOrToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.SubscriptionVerificationResult!>!
+StoreBridge.IWebhookAuthenticator
+StoreBridge.IWebhookAuthenticator.Store.get -> StoreBridge.Store
+StoreBridge.IWebhookAuthenticator.ValidateAsync(string! rawBody, string? bearerToken = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+StoreBridge.IWebhookParser
+StoreBridge.IWebhookParser.ParseAsync(string! rawBody, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.SubscriptionNotification!>!
+StoreBridge.IWebhookParser.Store.get -> StoreBridge.Store
+StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.AutoRenewDisabled = 1 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.AutoRenewEnabled = 2 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Cancelled = 6 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Created = 7 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Expired = 3 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.GracePeriod = 4 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.InBillingRetry = 8 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Other = 10 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Refunded = 5 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Renewed = 0 -> StoreBridge.NotificationEventType
+StoreBridge.NotificationEventType.Test = 9 -> StoreBridge.NotificationEventType
+StoreBridge.PriceConverter
+StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Cancelled = 1 -> StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Consumed = 4 -> StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Pending = 2 -> StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Purchased = 0 -> StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Refunded = 3 -> StoreBridge.PurchaseStatus
+StoreBridge.PurchaseStatus.Unknown = 5 -> StoreBridge.PurchaseStatus
+StoreBridge.Store
+StoreBridge.Store.Android = 1 -> StoreBridge.Store
+StoreBridge.Store.Apple = 0 -> StoreBridge.Store
+StoreBridge.SubscriptionNotification
+StoreBridge.SubscriptionNotification.EventAt.get -> System.DateTimeOffset?
+StoreBridge.SubscriptionNotification.EventAt.init -> void
+StoreBridge.SubscriptionNotification.EventType.get -> StoreBridge.NotificationEventType
+StoreBridge.SubscriptionNotification.EventType.init -> void
+StoreBridge.SubscriptionNotification.ExpiresAt.get -> System.DateTimeOffset?
+StoreBridge.SubscriptionNotification.ExpiresAt.init -> void
+StoreBridge.SubscriptionNotification.IsSandbox.get -> bool
+StoreBridge.SubscriptionNotification.IsSandbox.init -> void
+StoreBridge.SubscriptionNotification.NotificationId.get -> string!
+StoreBridge.SubscriptionNotification.NotificationId.init -> void
+StoreBridge.SubscriptionNotification.ProductId.get -> string!
+StoreBridge.SubscriptionNotification.ProductId.init -> void
+StoreBridge.SubscriptionNotification.RawEventType.get -> string!
+StoreBridge.SubscriptionNotification.RawEventType.init -> void
+StoreBridge.SubscriptionNotification.Status.get -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionNotification.Status.init -> void
+StoreBridge.SubscriptionNotification.Store.get -> StoreBridge.Store
+StoreBridge.SubscriptionNotification.Store.init -> void
+StoreBridge.SubscriptionNotification.SubscriptionId.get -> string!
+StoreBridge.SubscriptionNotification.SubscriptionId.init -> void
+StoreBridge.SubscriptionNotification.SubscriptionNotification() -> void
+StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.Active = 0 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.Cancelled = 2 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.Expired = 1 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.InBillingRetry = 4 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.InGracePeriod = 3 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.Revoked = 5 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionStatus.Unknown = 6 -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionVerificationResult
+StoreBridge.SubscriptionVerificationResult.AutoRenewProductId.get -> string!
+StoreBridge.SubscriptionVerificationResult.AutoRenewProductId.init -> void
+StoreBridge.SubscriptionVerificationResult.CancelledByUser.get -> bool
+StoreBridge.SubscriptionVerificationResult.CancelledByUser.init -> void
+StoreBridge.SubscriptionVerificationResult.CurrencyCode.get -> string!
+StoreBridge.SubscriptionVerificationResult.CurrencyCode.init -> void
+StoreBridge.SubscriptionVerificationResult.ErrorMessage.get -> string?
+StoreBridge.SubscriptionVerificationResult.ErrorMessage.init -> void
+StoreBridge.SubscriptionVerificationResult.ExpiresAt.get -> System.DateTimeOffset?
+StoreBridge.SubscriptionVerificationResult.ExpiresAt.init -> void
+StoreBridge.SubscriptionVerificationResult.GracePeriodExpiresAt.get -> System.DateTimeOffset?
+StoreBridge.SubscriptionVerificationResult.GracePeriodExpiresAt.init -> void
+StoreBridge.SubscriptionVerificationResult.IsPromotional.get -> bool
+StoreBridge.SubscriptionVerificationResult.IsPromotional.init -> void
+StoreBridge.SubscriptionVerificationResult.IsSandbox.get -> bool
+StoreBridge.SubscriptionVerificationResult.IsSandbox.init -> void
+StoreBridge.SubscriptionVerificationResult.IsVerified.get -> bool
+StoreBridge.SubscriptionVerificationResult.IsVerified.init -> void
+StoreBridge.SubscriptionVerificationResult.PriceAmount.get -> long
+StoreBridge.SubscriptionVerificationResult.PriceAmount.init -> void
+StoreBridge.SubscriptionVerificationResult.PriceDecimal.get -> decimal
+StoreBridge.SubscriptionVerificationResult.PriceDecimal.init -> void
+StoreBridge.SubscriptionVerificationResult.ProductId.get -> string!
+StoreBridge.SubscriptionVerificationResult.ProductId.init -> void
+StoreBridge.SubscriptionVerificationResult.PurchasedAt.get -> System.DateTimeOffset?
+StoreBridge.SubscriptionVerificationResult.PurchasedAt.init -> void
+StoreBridge.SubscriptionVerificationResult.Status.get -> StoreBridge.SubscriptionStatus
+StoreBridge.SubscriptionVerificationResult.Status.init -> void
+StoreBridge.SubscriptionVerificationResult.Store.get -> StoreBridge.Store
+StoreBridge.SubscriptionVerificationResult.Store.init -> void
+StoreBridge.SubscriptionVerificationResult.SubscriptionId.get -> string!
+StoreBridge.SubscriptionVerificationResult.SubscriptionId.init -> void
+StoreBridge.SubscriptionVerificationResult.SubscriptionVerificationResult() -> void
+StoreBridge.WebhookAuthenticationException
+StoreBridge.WebhookAuthenticationException.WebhookAuthenticationException(string! message) -> void
+StoreBridge.WebhookAuthenticationException.WebhookAuthenticationException(string! message, System.Exception! innerException) -> void
+static StoreBridge.InAppPurchaseVerificationResult.Failure(StoreBridge.Store store, string! errorMessage) -> StoreBridge.InAppPurchaseVerificationResult!
+static StoreBridge.PriceConverter.FromApplePrice(long priceInThousandths) -> decimal
+static StoreBridge.PriceConverter.FromGoogleMicros(long priceInMicros) -> decimal
+static StoreBridge.SubscriptionVerificationResult.Failure(StoreBridge.Store store, string! errorMessage) -> StoreBridge.SubscriptionVerificationResult!

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Common build + package metadata is in src/Directory.Build.props -->
+  <PropertyGroup>
+    <PackageId>StoreBridge</PackageId>
+    <Description>Core abstractions and models for Apple App Store and Google Play subscription management in .NET.</Description>
+    <PackageTags>apple;google;play;appstore;subscription;iap;in-app-purchase;billing;mobile</PackageTags>
+  </PropertyGroup>
+
+</Project>
