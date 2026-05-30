@@ -79,22 +79,28 @@ internal static class AppleCertificateChainValidator
 
     private static void ValidateChain(List<X509Certificate2> certs, IReadOnlyCollection<X509Certificate2> trustedRoots)
     {
-        using var chain = new X509Chain();
-        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        // Try each trusted root individually. If all roots are added to a single CustomTrustStore,
+        // the platform chain engine (especially OpenSSL on Linux) may pick a root whose subject name
+        // matches but whose key differs, producing a spurious "certificate signature failure" instead
+        // of falling through to the correct root.
+        string? lastErrors = null;
         foreach (var root in trustedRoots)
-            chain.ChainPolicy.CustomTrustStore.Add(root);
-        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-
-        // Add all certs except the leaf to the extra store so the engine can build the path
-        foreach (var intermediate in certs.Skip(1))
-            chain.ChainPolicy.ExtraStore.Add(intermediate);
-
-        if (!chain.Build(certs[0]))
         {
-            var errors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
-            throw new WebhookAuthenticationException(
-                $"Apple certificate chain validation failed: {errors}");
+            using var chain = new X509Chain();
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(root);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            foreach (var intermediate in certs.Skip(1))
+                chain.ChainPolicy.ExtraStore.Add(intermediate);
+
+            if (chain.Build(certs[0]))
+                return;
+
+            lastErrors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
         }
+
+        throw new WebhookAuthenticationException(
+            $"Apple certificate chain validation failed: {lastErrors ?? "unknown error"}");
     }
 
     private static void ValidateLeafExpiry(X509Certificate2 leaf)
