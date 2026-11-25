@@ -30,6 +30,8 @@ public sealed class AppleInAppPurchaseWebhookParserTests
     }
 
     [Theory]
+    [InlineData("ONE_TIME_CHARGE", InAppPurchaseEventType.Purchased)]
+    [InlineData("REFUND_REVERSED", InAppPurchaseEventType.RefundReversed)]
     [InlineData("REFUND", InAppPurchaseEventType.Refunded)]
     [InlineData("REVOKE", InAppPurchaseEventType.Refunded)]
     [InlineData("CONSUMPTION_REQUEST", InAppPurchaseEventType.ConsumptionRequest)]

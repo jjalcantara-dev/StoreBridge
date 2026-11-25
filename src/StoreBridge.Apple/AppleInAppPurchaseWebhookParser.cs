@@ -4,7 +4,7 @@ namespace StoreBridge.Apple;
 
 /// <summary>
 /// Parses App Store Server Notifications v2 for one-time in-app purchase events
-/// (REFUND, REVOKE, CONSUMPTION_REQUEST).
+/// (ONE_TIME_CHARGE, REFUND, REFUND_REVERSED, REVOKE, CONSUMPTION_REQUEST).
 /// </summary>
 public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParser
 {
@@ -44,7 +44,7 @@ public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParse
             EventAt = outerPayload.SignedDate.HasValue
                 ? DateTimeOffset.FromUnixTimeMilliseconds(outerPayload.SignedDate.Value)
                 : null,
-            IsSandbox = string.Equals(outerPayload.Data?.Environment, "Sandbox", StringComparison.OrdinalIgnoreCase)
+            IsSandbox = AppleJwtHelper.IsNonProduction(outerPayload.Data?.Environment)
         };
 
         return Task.FromResult(notification);
@@ -53,7 +53,11 @@ public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParse
     // https://developer.apple.com/documentation/appstoreservernotifications/notificationtype
     private static InAppPurchaseEventType MapEventType(string? type) => type switch
     {
+        // Consumable, non-consumable or non-renewing subscription purchased (also Family Sharing grants)
+        "ONE_TIME_CHARGE" => InAppPurchaseEventType.Purchased,
         "REFUND" => InAppPurchaseEventType.Refunded,
+        // A refund was reversed after a dispute — reinstate the content
+        "REFUND_REVERSED" => InAppPurchaseEventType.RefundReversed,
         "REVOKE" => InAppPurchaseEventType.Refunded,
         "CONSUMPTION_REQUEST" => InAppPurchaseEventType.ConsumptionRequest,
         "TEST" => InAppPurchaseEventType.Test,

@@ -39,7 +39,8 @@ public sealed class AppleWebhookParserTests
     [InlineData("REFUND", null, NotificationEventType.Refunded)]
     [InlineData("REVOKE", null, NotificationEventType.Refunded)]
     [InlineData("DID_FAIL_TO_RENEW", "GRACE_PERIOD", NotificationEventType.GracePeriod)]
-    [InlineData("DID_FAIL_TO_RENEW", null, NotificationEventType.Expired)]
+    [InlineData("DID_FAIL_TO_RENEW", null, NotificationEventType.InBillingRetry)]
+    [InlineData("REFUND_REVERSED", null, NotificationEventType.RefundReversed)]
     [InlineData("GRACE_PERIOD_EXPIRED", null, NotificationEventType.InBillingRetry)]
     [InlineData("OFFER_REDEEMED", null, NotificationEventType.Renewed)]
     [InlineData("UNKNOWN_TYPE", null, NotificationEventType.Other)]
@@ -115,6 +116,16 @@ public sealed class AppleWebhookParserTests
         Assert.True(result.IsSandbox);
     }
 
+    [Fact]
+    public async Task ParseAsync_AutoRenewDisabledWhileActive_StatusIsCancelled()
+    {
+        var signedPayload = BuildFakeJwt("DID_CHANGE_RENEWAL_STATUS", "AUTO_RENEW_DISABLED", status: 1, autoRenewStatus: 0);
+        var result = await _parser.ParseAsync($$"""{"signedPayload": "{{signedPayload}}"}""");
+
+        Assert.Equal(NotificationEventType.AutoRenewDisabled, result.EventType);
+        Assert.Equal(SubscriptionStatus.Cancelled, result.Status);
+    }
+
     // Builds a fake (unsigned) JWT for testing the parser's payload extraction logic.
     // The parser does not validate JWT signatures, only decodes the payload.
     private static string BuildFakeJwt(
@@ -122,7 +133,8 @@ public sealed class AppleWebhookParserTests
         string? subtype,
         int status = 1,
         string environment = "Production",
-        string? notificationUUID = null)
+        string? notificationUUID = null,
+        int? autoRenewStatus = null)
     {
         var header = Base64UrlEncode("""{"alg":"ES256","kid":"TEST"}""");
 
@@ -130,7 +142,10 @@ public sealed class AppleWebhookParserTests
         {
             status,
             environment,
-            signedTransactionInfo = BuildFakeTransactionJwt()
+            signedTransactionInfo = BuildFakeTransactionJwt(),
+            signedRenewalInfo = autoRenewStatus.HasValue
+                ? $"{Base64UrlEncode("""{"alg":"ES256"}""")}.{Base64UrlEncode(JsonSerializer.Serialize(new { autoRenewStatus }))}.fakesig"
+                : null
         };
 
         var payloadObj = new

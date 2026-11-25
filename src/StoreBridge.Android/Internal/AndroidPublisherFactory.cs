@@ -8,16 +8,24 @@ internal static class AndroidPublisherFactory
 {
     private static readonly string Scope = AndroidPublisherService.Scope.Androidpublisher;
 
+    /// <summary>
+    /// Builds the Play Developer API client from a base64-encoded service-account JSON key.
+    /// Only the <c>service_account</c> credential type is accepted.
+    /// </summary>
+    /// <exception cref="FormatException">The value is not valid base64.</exception>
+    /// <exception cref="InvalidOperationException">The JSON is not a valid service-account key.</exception>
     internal static AndroidPublisherService Create(string credentialsBase64)
     {
         var bytes = Convert.FromBase64String(credentialsBase64);
         using var stream = new MemoryStream(bytes);
-#pragma warning disable CS0618 // CredentialFactory alternative is async-only; credentials are always our own service account JSON
-        var credential = GoogleCredential.FromStream(stream).CreateScoped(Scope);
-#pragma warning restore CS0618
+        var credential = CredentialFactory.FromStream<ServiceAccountCredential>(stream)
+            .ToGoogleCredential()
+            .CreateScoped(Scope);
+
         return new AndroidPublisherService(new BaseClientService.Initializer
         {
-            HttpClientInitializer = credential
+            HttpClientInitializer = credential,
+            ApplicationName = "StoreBridge"
         });
     }
 }

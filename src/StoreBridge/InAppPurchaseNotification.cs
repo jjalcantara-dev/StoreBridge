@@ -26,6 +26,18 @@ public sealed class InAppPurchaseNotification
     /// <summary>The product identifier of the purchased item.</summary>
     public string ProductId { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Store order identifier, when the notification carries one
+    /// (Google <c>voidedPurchaseNotification</c> / <c>pendingRefundReviewNotification</c>). Empty otherwise.
+    /// </summary>
+    public string OrderId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Google only: the <c>pendingRefundToken</c> of a <see cref="InAppPurchaseEventType.RefundReviewRequested"/>
+    /// notification — pass it to the <c>orders.reviewRefund</c> API. Empty otherwise.
+    /// </summary>
+    public string RefundReviewToken { get; init; } = string.Empty;
+
     /// <summary>When the event occurred, if the platform includes a timestamp.</summary>
     public DateTimeOffset? EventAt { get; init; }
 

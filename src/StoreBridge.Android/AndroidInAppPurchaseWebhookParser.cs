@@ -4,7 +4,9 @@ namespace StoreBridge.Android;
 
 /// <summary>
 /// Parses Google Play Real-time Developer Notifications for one-time in-app purchase events
-/// delivered via Pub/Sub (ONE_TIME_PRODUCT_PURCHASED, ONE_TIME_PRODUCT_CANCELED).
+/// delivered via Pub/Sub: <c>oneTimeProductNotification</c> (PURCHASED / CANCELED),
+/// <c>voidedPurchaseNotification</c> (refunds / chargebacks), <c>pendingRefundReviewNotification</c>
+/// (chargeback awaiting your review) and <c>testNotification</c>.
 /// </summary>
 public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookParser
 {
@@ -25,7 +27,7 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
 
         // testNotification is a wiring check sent from Play Console; it has no purchase payload
         if (notification.TestNotification != null && notification.OneTimeProductNotification == null
-            && notification.VoidedPurchaseNotification == null)
+            && notification.VoidedPurchaseNotification == null && notification.PendingRefundReviewNotification == null)
         {
             return Task.FromResult(new InAppPurchaseNotification
             {
@@ -40,7 +42,8 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
             });
         }
 
-        // voidedPurchaseNotification covers refunds/chargebacks for both subscriptions and one-time purchases
+        // voidedPurchaseNotification covers refunds/chargebacks for both subscriptions and one-time purchases.
+        // It carries no SKU — the order ID is in OrderId; look the purchase up by PurchaseId (token).
         if (notification.VoidedPurchaseNotification is { } voided)
         {
             return Task.FromResult(new InAppPurchaseNotification
@@ -50,7 +53,25 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
                 RawEventType = $"VOIDED:{voided.RefundType}:{voided.ProductType}",
                 NotificationId = messageId,
                 PurchaseId = voided.PurchaseToken ?? string.Empty,
-                ProductId = voided.OrderId ?? string.Empty,
+                OrderId = voided.OrderId ?? string.Empty,
+                EventAt = notification.EventTimeMillis.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
+                    : null,
+                IsSandbox = false
+            });
+        }
+
+        // A chargeback Google wants you to review: respond via orders.reviewRefund within 24 hours
+        if (notification.PendingRefundReviewNotification is { } review)
+        {
+            return Task.FromResult(new InAppPurchaseNotification
+            {
+                Store = Store,
+                EventType = InAppPurchaseEventType.RefundReviewRequested,
+                RawEventType = $"PENDING_REFUND_REVIEW:{review.RefundReason}",
+                NotificationId = messageId,
+                OrderId = review.OrderId ?? string.Empty,
+                RefundReviewToken = review.PendingRefundToken ?? string.Empty,
                 EventAt = notification.EventTimeMillis.HasValue
                     ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
                     : null,

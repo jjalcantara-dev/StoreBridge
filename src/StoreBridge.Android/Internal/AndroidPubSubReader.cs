@@ -15,17 +15,24 @@ internal static class AndroidPubSubReader
         if (string.IsNullOrWhiteSpace(rawBody))
             throw new ArgumentException("Webhook body cannot be empty.", nameof(rawBody));
 
-        var pushMessage = JsonSerializer.Deserialize<PubSubPushMessage>(rawBody)
-            ?? throw new FormatException("Failed to deserialize Pub/Sub message.");
+        try
+        {
+            var pushMessage = JsonSerializer.Deserialize<PubSubPushMessage>(rawBody)
+                ?? throw new FormatException("Failed to deserialize Pub/Sub message.");
 
-        if (string.IsNullOrEmpty(pushMessage.Message?.Data))
-            throw new FormatException("Pub/Sub message.data is empty.");
+            if (string.IsNullOrEmpty(pushMessage.Message?.Data))
+                throw new FormatException("Pub/Sub message.data is empty.");
 
-        var json = Encoding.UTF8.GetString(Convert.FromBase64String(pushMessage.Message.Data));
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(pushMessage.Message.Data));
 
-        var notification = JsonSerializer.Deserialize<DeveloperNotification>(json)
-            ?? throw new FormatException("Failed to deserialize DeveloperNotification payload.");
+            var notification = JsonSerializer.Deserialize<DeveloperNotification>(json)
+                ?? throw new FormatException("Failed to deserialize DeveloperNotification payload.");
 
-        return (notification, pushMessage.Message.MessageId ?? string.Empty);
+            return (notification, pushMessage.Message.MessageId ?? string.Empty);
+        }
+        catch (JsonException ex)
+        {
+            throw new FormatException($"Pub/Sub message is not valid JSON: {ex.Message}", ex);
+        }
     }
 }

@@ -29,7 +29,11 @@ public sealed class AndroidServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddAndroidWebhooks(opts => opts.WebhookUrl = "https://example.com/webhook");
+        services.AddAndroidWebhooks(opts =>
+        {
+            opts.WebhookUrl = "https://example.com/webhook";
+            opts.ExpectedServiceAccountEmail = "pubsub@example.iam.gserviceaccount.com";
+        });
 
         using var sp = services.BuildServiceProvider();
 
@@ -97,5 +101,37 @@ public sealed class AndroidServiceCollectionExtensionsTests
         var ex = Assert.Throws<OptionsValidationException>(
             () => sp.GetRequiredService<AndroidWebhookAuthenticator>());
         Assert.Contains("absolute", ex.Message);
+    }
+
+    [Fact]
+    public void AddAndroidWebhooks_MissingServiceAccountEmail_ThrowsOnResolve()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAndroidWebhooks(opts => opts.WebhookUrl = "https://example.com/webhook");
+
+        using var sp = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => sp.GetRequiredService<AndroidWebhookAuthenticator>());
+        Assert.Contains("ExpectedServiceAccountEmail", ex.Message);
+    }
+
+    [Fact]
+    public void AddAndroidSubscriptions_NonServiceAccountCredentials_ThrowsOnResolve()
+    {
+        // An authorized_user (or external_account) JSON must be rejected: only service-account keys are allowed
+        var json = """{"type":"authorized_user","client_id":"x","client_secret":"y","refresh_token":"z"}""";
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAndroidSubscriptions(opts =>
+        {
+            opts.PackageName = "com.example.app";
+            opts.CredentialsBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        });
+
+        using var sp = services.BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => sp.GetRequiredService<AndroidSubscriptionVerifier>());
     }
 }

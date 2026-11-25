@@ -161,3 +161,16 @@ static StoreBridge.InAppPurchaseVerificationResult.Failure(StoreBridge.Store sto
 static StoreBridge.PriceConverter.FromApplePrice(long priceInThousandths) -> decimal
 static StoreBridge.PriceConverter.FromGoogleMicros(long priceInMicros) -> decimal
 static StoreBridge.SubscriptionVerificationResult.Failure(StoreBridge.Store store, string! errorMessage) -> StoreBridge.SubscriptionVerificationResult!
+StoreBridge.InAppPurchaseEventType.RefundReversed = 6 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseEventType.RefundReviewRequested = 7 -> StoreBridge.InAppPurchaseEventType
+StoreBridge.InAppPurchaseNotification.OrderId.get -> string!
+StoreBridge.InAppPurchaseNotification.OrderId.init -> void
+StoreBridge.InAppPurchaseNotification.RefundReviewToken.get -> string!
+StoreBridge.InAppPurchaseNotification.RefundReviewToken.init -> void
+StoreBridge.NotificationEventType.RefundReversed = 11 -> StoreBridge.NotificationEventType
+StoreBridge.SubscriptionStatusExtensions
+static StoreBridge.SubscriptionStatusExtensions.GrantsAccess(this StoreBridge.SubscriptionStatus status) -> bool
+StoreBridge.InAppPurchaseVerificationResult.OrderId.get -> string!
+StoreBridge.InAppPurchaseVerificationResult.OrderId.init -> void
+StoreBridge.InAppPurchaseVerificationResult.RefundableQuantity.get -> int?
+StoreBridge.InAppPurchaseVerificationResult.RefundableQuantity.init -> void

@@ -5,8 +5,9 @@ namespace StoreBridge.Android.Internal;
 /// <summary>
 /// Retry policy for the Google Play Developer API. Mirrors <c>AppleRetryHelper</c>: fibonacci
 /// backoff (1, 2, 3, 5, 8 s), retries only on transient failures — 5xx responses, 429 Too Many
-/// Requests, and network-level errors. 4xx (other than 429) propagates immediately; cancellation
-/// always propagates.
+/// Requests, network-level errors and HTTP timeouts. 4xx (other than 429) propagates immediately;
+/// caller cancellation always propagates. A timeout that survives every attempt is rethrown as
+/// <see cref="TimeoutException"/>.
 /// </summary>
 internal static class AndroidRetryHelper
 {
@@ -28,15 +29,19 @@ internal static class AndroidRetryHelper
             {
                 return await operation(cancellationToken);
             }
-            catch (Google.GoogleApiException ex) when (IsTransient(ex))
+            catch (Google.GoogleApiException ex) when (IsTransient(ex.HttpStatusCode))
             {
                 lastEx = ex;
             }
-            catch (HttpRequestException ex)
+            catch (HttpRequestException ex) when (ex.StatusCode is null || IsTransient(ex.StatusCode.Value))
             {
                 lastEx = ex;
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The Google client's HttpClient timeout surfaces as TaskCanceledException.
+                lastEx = new TimeoutException("The Google Play Developer API request timed out.", ex);
+            }
 
             if (attempt < maxRetries - 1)
                 await Task.Delay(
@@ -47,13 +52,7 @@ internal static class AndroidRetryHelper
         throw lastEx!;
     }
 
-    private static bool IsTransient(Google.GoogleApiException ex)
-    {
-        // No HTTP status set ⇒ network or pre-flight failure ⇒ worth retrying
-        if (ex.HttpStatusCode == 0)
-            return true;
-
-        var code = (int)ex.HttpStatusCode;
-        return code >= 500 || code == (int)HttpStatusCode.TooManyRequests;
-    }
+    // No HTTP status set ⇒ network or pre-flight failure ⇒ worth retrying
+    private static bool IsTransient(HttpStatusCode status) =>
+        status == 0 || (int)status >= 500 || status == HttpStatusCode.TooManyRequests;
 }

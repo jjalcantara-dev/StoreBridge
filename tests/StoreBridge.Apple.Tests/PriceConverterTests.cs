@@ -23,3 +23,17 @@ public sealed class PriceConverterTests
         Assert.Equal(expected, PriceConverter.FromGoogleMicros(input));
     }
 }
+
+public sealed class SubscriptionStatusExtensionsTests
+{
+    [Theory]
+    [InlineData(SubscriptionStatus.Active, true)]
+    [InlineData(SubscriptionStatus.Cancelled, true)]
+    [InlineData(SubscriptionStatus.InGracePeriod, true)]
+    [InlineData(SubscriptionStatus.InBillingRetry, false)]
+    [InlineData(SubscriptionStatus.Expired, false)]
+    [InlineData(SubscriptionStatus.Revoked, false)]
+    [InlineData(SubscriptionStatus.Unknown, false)]
+    public void GrantsAccess_MatchesEntitlementSemantics(SubscriptionStatus status, bool expected) =>
+        Assert.Equal(expected, status.GrantsAccess());
+}

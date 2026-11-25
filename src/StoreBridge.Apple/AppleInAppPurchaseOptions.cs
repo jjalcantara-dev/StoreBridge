@@ -11,4 +11,10 @@ public sealed class AppleInAppPurchaseOptions : AppleApiOptions
     /// Sandbox:    https://api.storekit-sandbox.itunes.apple.com/inApps/v1/transactions/
     /// </summary>
     public string TransactionsBaseUrl { get; set; } = "https://api.storekit.itunes.apple.com/inApps/v1/transactions/";
+
+    /// <summary>
+    /// Sandbox endpoint used when <see cref="AppleApiOptions.SandboxFallback"/> is enabled and
+    /// <see cref="TransactionsBaseUrl"/> returns 404.
+    /// </summary>
+    public string SandboxTransactionsBaseUrl { get; set; } = "https://api.storekit-sandbox.itunes.apple.com/inApps/v1/transactions/";
 }

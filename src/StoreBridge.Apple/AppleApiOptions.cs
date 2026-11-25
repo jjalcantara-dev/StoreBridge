@@ -21,6 +21,17 @@ public abstract class AppleApiOptions
     /// </summary>
     public string PrivateKeyBase64 { get; set; } = string.Empty;
 
-    /// <summary>Maximum number of retry attempts when the Apple API returns a transient error. Default: 3.</summary>
+    /// <summary>
+    /// Maximum number of attempts (including the initial call) when the Apple API returns a transient error
+    /// (5xx, 429, network failure, timeout). Default: 3.
+    /// </summary>
     public int MaxRetries { get; set; } = 3;
+
+    /// <summary>
+    /// When <see langword="true"/> (default) and the primary endpoint answers <c>404 Not Found</c>, the lookup
+    /// is retried once against the sandbox endpoint. This is what Apple recommends: App Review and TestFlight
+    /// purchases are sandbox transactions even when your server talks to production.
+    /// Has no effect when the primary endpoint already is the sandbox endpoint.
+    /// </summary>
+    public bool SandboxFallback { get; set; } = true;
 }

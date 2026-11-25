@@ -7,7 +7,7 @@ and inspect exactly what the library parsed.
 
 ## Why this exists
 
-The library's 197 unit tests all use synthetic data. Before trusting it in production,
+The library's unit tests all use synthetic data. Before trusting it in production,
 validate it against at least one **real** payload per platform. Apple and Google both let
 you send real, signed test notifications without a published app.
 
@@ -24,15 +24,19 @@ dotnet user-secrets set "Apple:KeyId" "ABC1234567"
 dotnet user-secrets set "Apple:IssuerId" "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 dotnet user-secrets set "Apple:BundleId" "com.example.app"
 dotnet user-secrets set "Apple:PrivateKeyBase64" "<base64 of the .p8 key body>"
+dotnet user-secrets set "Apple:Webhook:BundleId" "com.example.app"   # notifications for other apps are rejected
 
 # Google — base64 of the service-account JSON
 dotnet user-secrets set "Google:CredentialsBase64" "<base64 of service-account.json>"
 dotnet user-secrets set "Google:PackageName" "com.example.app"
 dotnet user-secrets set "Google:Webhook:WebhookUrl" "https://<your-tunnel>/webhooks/google"
+# Required: the service account set on the Pub/Sub push subscription's authentication
+dotnet user-secrets set "Google:Webhook:ExpectedServiceAccountEmail" "pubsub-pusher@<project>.iam.gserviceaccount.com"
 ```
 
 The `Apple` section defaults to the **sandbox** App Store endpoints — change them in
-`appsettings.json` for production transactions.
+`appsettings.json` for production transactions (production lookups that return 404 are retried
+against the sandbox automatically unless `SandboxFallback` is `false`).
 
 ## Run
 

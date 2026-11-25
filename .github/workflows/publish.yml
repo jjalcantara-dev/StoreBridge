@@ -5,42 +5,56 @@ on:
     tags:
       - "v*.*.*"
 
+# NuGet Trusted Publishing: the job exchanges a GitHub OIDC token for a short-lived NuGet API key,
+# so no long-lived NUGET_API_KEY secret is stored. Requires a Trusted Publishing policy on nuget.org
+# (repository owner + repository + workflow file "publish.yml") and the NUGET_USER repository secret
+# (your nuget.org profile name, not your email).
+permissions:
+  contents: read
+  id-token: write   # required to request the GitHub OIDC token
+
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: |
-            8.x
-            9.x
-            10.x
-
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build
-        run: dotnet build --no-restore --configuration Release
-
-      - name: Test
-        run: dotnet test --no-build --configuration Release
+          dotnet-version: 10.x
 
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
+      - name: Restore
+        run: dotnet restore
+
+      # Pass the version to the build (not just to pack): pack runs with --no-build, so the assemblies'
+      # AssemblyVersion / FileVersion / InformationalVersion come from this step.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release
+
       - name: Pack StoreBridge
-        run: dotnet pack src/StoreBridge/StoreBridge.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./nupkgs
+        run: dotnet pack src/StoreBridge/StoreBridge.csproj --no-build --configuration Release -p:Version=${{ steps.version.outputs.VERSION }} --output ./nupkgs
 
       - name: Pack StoreBridge.Apple
-        run: dotnet pack src/StoreBridge.Apple/StoreBridge.Apple.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./nupkgs
+        run: dotnet pack src/StoreBridge.Apple/StoreBridge.Apple.csproj --no-build --configuration Release -p:Version=${{ steps.version.outputs.VERSION }} --output ./nupkgs
 
       - name: Pack StoreBridge.Android
-        run: dotnet pack src/StoreBridge.Android/StoreBridge.Android.csproj --no-build --configuration Release -p:PackageVersion=${{ steps.version.outputs.VERSION }} --output ./nupkgs
+        run: dotnet pack src/StoreBridge.Android/StoreBridge.Android.csproj --no-build --configuration Release -p:Version=${{ steps.version.outputs.VERSION }} --output ./nupkgs
+
+      # Logged in right before pushing: the API key it returns is short-lived.
+      - name: NuGet login (Trusted Publishing / OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
 
       - name: Push to NuGet.org
-        run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

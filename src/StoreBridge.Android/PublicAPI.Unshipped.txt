@@ -4,7 +4,7 @@ StoreBridge.Android.AndroidInAppPurchaseOptions.AndroidInAppPurchaseOptions() ->
 StoreBridge.Android.AndroidInAppPurchaseVerifier
 StoreBridge.Android.AndroidInAppPurchaseVerifier.AndroidInAppPurchaseVerifier(StoreBridge.Android.AndroidInAppPurchaseOptions! options, Google.Apis.AndroidPublisher.v3.AndroidPublisherService? service = null, Microsoft.Extensions.Logging.ILogger<StoreBridge.Android.AndroidInAppPurchaseVerifier!>? logger = null) -> void
 StoreBridge.Android.AndroidInAppPurchaseVerifier.Store.get -> StoreBridge.Store
-StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyAsync(string! packageName, string! productId, string! purchaseToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
+StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyAsync(string! packageName, string? productId, string! purchaseToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
 StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyPurchaseAsync(string! purchaseToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
 StoreBridge.Android.AndroidInAppPurchaseWebhookParser
 StoreBridge.Android.AndroidInAppPurchaseWebhookParser.AndroidInAppPurchaseWebhookParser() -> void
@@ -32,7 +32,7 @@ StoreBridge.Android.AndroidWebhookAuthenticator.Store.get -> StoreBridge.Store
 StoreBridge.Android.AndroidWebhookAuthenticator.ValidateAsync(string! rawBody, string? bearerToken = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.AndroidWebhookAuthenticatorOptions() -> void
-StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.get -> string?
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.get -> string!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.set -> void
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.WebhookUrl.get -> string!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.WebhookUrl.set -> void
@@ -45,3 +45,5 @@ static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidInAppPur
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Android.AndroidSubscriptionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidWebhooks(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Android.AndroidWebhookAuthenticatorOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.get -> string?
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.set -> void

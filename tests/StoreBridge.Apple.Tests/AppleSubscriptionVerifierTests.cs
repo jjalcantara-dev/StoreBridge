@@ -370,4 +370,76 @@ public sealed class AppleSubscriptionVerifierTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             verifier.VerifySubscriptionAsync("token", "premium_monthly", cts.Token));
     }
+
+    // ── product selection & normalized status ───────────────────
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_ProductIdNotInResponse_FailsInsteadOfFallingBack()
+    {
+        // Token belongs to premium_monthly; the client claims premium_yearly → must not verify
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse(productId: "premium_monthly")));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_yearly");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("premium_yearly", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_ActiveWithAutoRenewOff_IsCancelledAndGrantsAccess()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse(status: 1, autoRenewStatus: 0)));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.Equal(SubscriptionStatus.Cancelled, result.Status);
+        Assert.True(result.Status.GrantsAccess());
+    }
+
+    [Theory]
+    [InlineData("Xcode")]
+    [InlineData("LocalTesting")]
+    [InlineData("Sandbox")]
+    public async Task VerifySubscriptionAsync_NonProductionEnvironments_AreSandbox(string environment)
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse(environment: environment)));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.True(result.IsSandbox);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_ProductionNotFound_FallsBackToSandbox()
+    {
+        var handler = new FakeHttpMessageHandler(
+            (HttpStatusCode.NotFound, "{}"),
+            (HttpStatusCode.OK, BuildResponse(environment: "Sandbox")));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.True(result.IsVerified);
+        Assert.True(result.IsSandbox);
+        Assert.Contains("storekit-sandbox", handler.RequestUris[1].Host);
+    }
+
+    // ── log hygiene ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_Failure_LogsRedactedTransactionId()
+    {
+        var logger = new CapturingLogger<AppleSubscriptionVerifier>();
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.Unauthorized, "{}"));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler), logger);
+
+        await verifier.VerifySubscriptionAsync("2000000123456789", "premium_monthly");
+
+        var message = Assert.Single(logger.Messages);
+        Assert.DoesNotContain("2000000123456789", message);
+        Assert.Contains("2000…6789", message);
+    }
 }
