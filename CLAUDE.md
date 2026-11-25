@@ -42,6 +42,7 @@ This is a .NET library (targets net10.0 — .NET 8/9 reached end of support on 2
 - `PurchaseStatus` enum — For one-time purchases: `Purchased`, `Consumed`, `Cancelled`, `Pending`, `Refunded`, `Unknown`.
 - `NotificationEventType` enum — Normalized events: `Renewed`, `AutoRenewDisabled`, `AutoRenewEnabled`, `Created`, `InBillingRetry`, `GracePeriod`, `Refunded`, `Cancelled`, `Expired`, `Test`, `Other`, `RefundReversed`. **New enum members are appended after `Other`** so existing numeric values never shift.
 - `InAppPurchaseEventType` enum — `Purchased`, `Refunded`, `Cancelled`, `ConsumptionRequest`, `Test`, `Other`, `RefundReversed`, `RefundReviewRequested`. `InAppPurchaseNotification` also carries `OrderId` and `RefundReviewToken` (Google).
+- `SubscriptionVerificationResult` also exposes `IsAcknowledged` and `LinkedPurchaseToken` (Google only) and `ExternalAccountId` (Apple `appAccountToken` / Google `obfuscatedExternalAccountId`).
 - Both notification types expose `NotificationId` — Apple's `notificationUUID` / Google's Pub/Sub `messageId` — use it to deduplicate retried deliveries.
 - `PriceConverter` — Static utility; Apple prices are in thousandths, Google prices are in micros.
 
@@ -49,16 +50,19 @@ This is a .NET library (targets net10.0 — .NET 8/9 reached end of support on 2
 
 Each platform package ships `IServiceCollection` extensions (`AppleServiceCollectionExtensions`, `AndroidServiceCollectionExtensions`):
 `AddAppleSubscriptions`, `AddAppleInAppPurchases`, `AddAppleWebhooks` (requires `AppleWebhookAuthenticatorOptions.BundleId`), and the Android equivalents. Each accepts either an
-`Action<TOptions>` or an `IConfiguration` section (`AddAndroidWebhooks` takes only an `Action`). Apple verifiers register a named `HttpClient` via `IHttpClientFactory`
-(`AppleSubscriptionVerifier.HttpClientName` / `AppleInAppPurchaseVerifier.HttpClientName`). All verifiers and parsers accept an
-optional `ILogger<T>`; when constructed manually without one they fall back to `NullLogger`.
+`Action<TOptions>` or an `IConfiguration` section. Registrations are idempotent (`TryAdd*`; interface forwarders go through
+`TryAddEnumerable` with a typed factory so Apple and Android registrations of the same interface coexist). Apple verifiers register a named `HttpClient` via `IHttpClientFactory`
+(`AppleSubscriptionVerifier.HttpClientName` / `AppleInAppPurchaseVerifier.HttpClientName`) whose `Timeout` comes from `RequestTimeout`. All verifiers and parsers accept an
+optional `ILogger<T>`; DI resolves it with `GetService` (logging need not be registered) and manual construction falls back to `NullLogger`.
+All four verifiers and `AppleWebhookAuthenticator` are `IDisposable` and throw `ObjectDisposedException` after disposal; the Android
+verifiers create their `AndroidPublisherService` lazily under a `Lock` (a failed creation is retried on the next call, not cached).
 
 Every DI extension also registers an `IValidateOptions<T>` (internal: `AppleSubscriptionOptionsValidator`,
 `AppleInAppPurchaseOptionsValidator`, `AppleWebhookAuthenticatorOptionsValidator`, `AndroidSubscriptionOptionsValidator`,
 `AndroidInAppPurchaseOptionsValidator`, `AndroidWebhookAuthenticatorOptionsValidator`). The first time `IOptions<T>.Value` is read, the validator runs full checks
 (required fields set, `PrivateKeyBase64` decodes as PKCS#8 ECDSA, `CredentialsBase64` parses as a service-account key through
 `CredentialFactory.FromStream<ServiceAccountCredential>`, `WebhookUrl` / sandbox URLs are absolute http(s) URIs, webhook `BundleId` and
-`ExpectedServiceAccountEmail` are set, `MaxRetries >= 1`). A failed check raises `OptionsValidationException` with a
+`ExpectedServiceAccountEmail` are set, `MaxRetries >= 1`, `RequestTimeout > 0`, Apple key is P-256). A failed check raises `OptionsValidationException` with a
 human-readable message — by design this surfaces at the first verifier/authenticator resolve (so DI smoke tests catch
 misconfigurations in CI), not at the first webhook hit in production.
 
@@ -82,21 +86,27 @@ The library follows a deliberate, two-tier policy that the unit tests pin down �
    - A `productId` that does not match the purchase → `Failure` (never fall back to another product)
    - Apple-style 410 Gone on Google → `IsVerified = true, Status = Expired` (correct, not an error)
 
+   Webhook authenticators and parsers throw only `WebhookAuthenticationException`, `FormatException` or `ArgumentException`
+   for malformed input (JSON/base64/crypto/timestamp errors are wrapped) — `AppleWebhookFuzzTests` / `AndroidWebhookFuzzTests` pin this.
+
    `OperationCanceledException` caused by the **caller's** token **always propagates** — never swallow it.
    Each verifier calls `cancellationToken.ThrowIfCancellationRequested()` on entry so callers see cancellation even
    if the underlying HTTP client doesn't honor the token.
 
-Retry: `AppleRetryHelper` and `AndroidRetryHelper` both use fibonacci backoff (1, 2, 3, 5, 8 s) and retry on 5xx, 429,
-no-status network failures and HTTP timeouts. Other 4xx propagate immediately — permanent caller errors. Default
-`MaxRetries = 3` on both `AppleApiOptions` and `AndroidOptions`.
+Retry: `AppleRetryHelper` and `AndroidRetryHelper` both use fibonacci backoff (1, 2, 3, 5, 8 s) with ±25 % jitter and retry on 5xx, 429,
+no-status network failures and HTTP timeouts. Apple honours `Retry-After` (via the internal `AppleHttpException`, capped at 30 s).
+Other 4xx propagate immediately — permanent caller errors. Defaults on both `AppleApiOptions` and `AndroidOptions`:
+`MaxRetries = 3`, `RequestTimeout = 30 s`. The Google SDK's own back-off is disabled (`ExponentialBackOffPolicy.None`) so retries don't multiply.
 
 ### Apple implementation
 
-`AppleSubscriptionVerifier` and `AppleInAppPurchaseVerifier` call the App Store Server API using a short-lived JWT (ES256) built by hand in `AppleJwtHelper` (no IdentityModel dependency) from a private key provided as base64 in options. The JWT is generated once per call and shared across retry attempts. Both verifiers go through `AppleApiClient.GetAsync` (bearer auth, URL-escaped identifier, retries, error mapping).
+`AppleSubscriptionVerifier` and `AppleInAppPurchaseVerifier` call the App Store Server API using a short-lived JWT (ES256) built by hand in `AppleJwtHelper` (no IdentityModel dependency) from a private key provided as base64 in options. The JWT (20-minute `exp`) is cached per verifier by `AppleTokenCache` and reused for 15 minutes. Both verifiers go through `AppleApiClient.GetAsync` (bearer auth, URL-escaped identifier — `.`/`..` rejected, retries, `Retry-After`, error mapping).
+
+Apple's `LastTransactionsItem` has **no `productId`** (only `originalTransactionId`, `status`, `signedTransactionInfo`, `signedRenewalInfo`): `AppleSubscriptionVerifier` decodes every `signedTransactionInfo` and matches `productId` against the decoded payload; without `productId` it prefers the item whose (original) transaction ID equals the requested one. Both verifiers reject a decoded `bundleId` that differs from the configured one, and with `VerifyResponseSignatures = true` they also run `AppleCertificateChainValidator` on the returned JWS (validity evaluated at its `signedDate`). Test fixtures must mirror the real response shape.
 
 Sandbox vs production is controlled by `AppleSubscriptionOptions.SubscriptionsBaseUrl` (or `AppleInAppPurchaseOptions.TransactionsBaseUrl`). The default is production. With `SandboxFallback = true` (default), a `404` from the primary URL is retried once against `SandboxSubscriptionsBaseUrl` / `SandboxTransactionsBaseUrl` — App Review / TestFlight purchases are sandbox transactions. `IsSandbox` is true for any environment other than `Production` (`Sandbox`, `Xcode`, `LocalTesting`).
 
-`AppleWebhookParser` / `AppleInAppPurchaseWebhookParser` decode nested signed JWTs from App Store Server Notifications v2 — they only decode payloads, they do **not** verify signatures. `AppleWebhookAuthenticator` is the security boundary and mirrors Apple's App Store Server Libraries: `alg` must be ES256, `x5c` must hold exactly 3 certs, the leaf must carry OID `1.2.840.113635.100.6.11.1` and the intermediate OID `1.2.840.113635.100.6.2.1`, the chain must be leaf → x5c intermediate → a pinned root (bundled Apple Root CA - G3; AIA downloads disabled), and the ES256 signature must verify — for the outer JWT and the nested `signedTransactionInfo` / `signedRenewalInfo`. It then binds the notification to the app via `AppleWebhookAuthenticatorOptions`: `bundleId` (from `data`, `summary` or `externalPurchaseToken`, and the nested transaction) must match `BundleId`, `AppAppleId` is checked on production notifications when set, and non-production environments are rejected when `AllowSandbox = false`. Call `AppleWebhookAuthenticator.ValidateAsync` before handing the body to a parser. A second constructor accepts one or many DER-encoded root CAs (root rotation, tests). Event mapping follows Apple's docs: `DID_FAIL_TO_RENEW` without subtype → `InBillingRetry`; `ONE_TIME_CHARGE` → `Purchased`; `REFUND_REVERSED` → `RefundReversed`. The `TEST` notification type (triggered via the App Store Server API `requestTestNotification` endpoint) maps to `NotificationEventType.Test` / `InAppPurchaseEventType.Test`.
+`AppleWebhookParser` / `AppleInAppPurchaseWebhookParser` decode nested signed JWTs from App Store Server Notifications v2 — they only decode payloads, they do **not** verify signatures. `AppleWebhookAuthenticator` is the security boundary and mirrors Apple's App Store Server Libraries: `alg` must be ES256, `x5c` must hold exactly 3 certs, the leaf must carry OID `1.2.840.113635.100.6.11.1` and the intermediate OID `1.2.840.113635.100.6.2.1`, the chain must be leaf → x5c intermediate → a pinned root (bundled Apple Root CA - G3; AIA downloads disabled), and the ES256 signature must verify — for the outer JWT and the nested `signedTransactionInfo` / `signedRenewalInfo`. It then binds the notification to the app via `AppleWebhookAuthenticatorOptions`: `bundleId` (from `data`, `summary` or `externalPurchaseToken`, and the nested transaction) must match `BundleId`, `AppAppleId` is checked on production notifications when set, and non-production environments are rejected when `AllowSandbox = false`. Call `AppleWebhookAuthenticator.ValidateAsync` before handing the body to a parser. A second constructor accepts one or many DER-encoded root CAs (root rotation, tests). Opt-in `AppleWebhookAuthenticatorOptions.ValidateCertificateAtSignedDate` evaluates each JWS's chain at its `signedDate` (Apple's libraries do this when online checks are off); `EnableOnlineRevocationCheck` builds the chain a second time with `X509RevocationMode.Online` only after it has been anchored to the pinned root (downloads stay disabled; verified to work on Linux). An internal `TimeProvider` constructor is the test seam for certificate time. Event mapping follows Apple's docs: `DID_FAIL_TO_RENEW` without subtype → `InBillingRetry`; `ONE_TIME_CHARGE` → `Purchased`; `REFUND_REVERSED` → `RefundReversed`; `DID_CHANGE_RENEWAL_STATUS` maps by subtype (unknown subtype → `Other`). The `TEST` notification type (triggered via the App Store Server API `requestTestNotification` endpoint) maps to `NotificationEventType.Test` / `InAppPurchaseEventType.Test`.
 
 Internal helpers live under `StoreBridge.Apple/Internal/`: `AppleJwtHelper.cs` (JWT generation/decoding, wraps bad-key errors into `InvalidOperationException`), `AppleApiModels.cs` (deserialization models), `AppleRetryHelper.cs` (retry loop), `AppleStatusMapper.cs` (numeric status → `SubscriptionStatus` mapping), `AppleCertificateChainValidator.cs` (x5c chain + signature validation), and `AppleOptionsValidator.cs` (`IValidateOptions<T>` implementations).
 
@@ -106,7 +116,7 @@ Internal helpers live under `StoreBridge.Apple/Internal/`: `AppleJwtHelper.cs` (
 
 Both verifiers use thin internal interfaces (`IAndroidSubscriptionsv2`, `IAndroidProducts`) that wrap the concrete Google client. This allows unit testing with NSubstitute without mocking the Google SDK directly. Both verifiers expose an internal constructor that accepts these interfaces.
 
-`AndroidWebhookParser` decodes the base64-encoded JSON message inside the Pub/Sub wrapper and handles `subscriptionNotification` (types 1–13 and 17–22), `voidedPurchaseNotification` with `productType = 1` (subscription → `Refunded`/`Revoked`), and `testNotification` (mapped to `NotificationEventType.Test`); anything else throws `FormatException`. `AndroidInAppPurchaseWebhookParser` handles `oneTimeProductNotification`, `voidedPurchaseNotification` (refunds/chargebacks → `InAppPurchaseEventType.Refunded`, `orderId` in `OrderId`), `pendingRefundReviewNotification` (→ `RefundReviewRequested`, token in `RefundReviewToken`), and `testNotification`. `AndroidPubSubReader` wraps `JsonException` into `FormatException`. Google no longer documents `subscriptionNotification.subscriptionId`, so `SubscriptionNotification.ProductId` may be empty for Android. `AndroidPubSubReader.Parse` returns both the decoded `DeveloperNotification` and the Pub/Sub envelope `messageId` (surfaced as `NotificationId`).
+Real RTDN payloads send `eventTimeMillis` as a **string** (Proto3 JSON) — `DeveloperNotification.EventTimeMillis` uses `JsonNumberHandling.AllowReadingFromString`; keep test payloads string-encoded. `AndroidWebhookParser` decodes the base64-encoded JSON message inside the Pub/Sub wrapper and handles `subscriptionNotification` (types 1–13 and 17–22), `voidedPurchaseNotification` with `productType = 1` (subscription → `Refunded`/`Revoked`), and `testNotification` (mapped to `NotificationEventType.Test`); anything else throws `FormatException`. `AndroidInAppPurchaseWebhookParser` handles `oneTimeProductNotification`, one-time `voidedPurchaseNotification` (refunds/chargebacks → `InAppPurchaseEventType.Refunded`, `orderId` in `OrderId`; subscription voids throw `FormatException`), `pendingRefundReviewNotification` (→ `RefundReviewRequested`, token in `RefundReviewToken`), and `testNotification`. `AndroidPubSubReader` wraps `JsonException` into `FormatException`. Google no longer documents `subscriptionNotification.subscriptionId`, so `SubscriptionNotification.ProductId` may be empty for Android. `AndroidPubSubReader.Parse` returns both the decoded `DeveloperNotification` and the Pub/Sub envelope `messageId` (surfaced as `NotificationId`).
 
 `AndroidWebhookAuthenticator` validates the OIDC Bearer token Google attaches to Pub/Sub push requests (signature, audience = your webhook URL) and **requires** `ExpectedServiceAccountEmail` to match the token's verified `email` — audience alone is forgeable by any GCP account. Optional `ExpectedPackageName` checks the notification's `packageName`. Call `ValidateAsync` with the `Authorization` header value before parsing.
 
@@ -126,6 +136,8 @@ namespace `StoreBridge.Internal`, compiled into both platform packages through a
 ### Testing
 
 All tests are unit tests — no integration tests against real Apple/Google APIs.
+
+Apple tests also include `AppleRealNotificationTests` — a genuine Apple-signed `TEST` notification (MIT-licensed fixture in `Fixtures/RealAppleNotifications.cs`, leaf expired 2023) validated at its signing time through the `TimeProvider` seam — and seeded fuzz tests (`AppleWebhookFuzzTests`, `AndroidWebhookFuzzTests`).
 
 Test projects use **xunit.v3** via the `xunit.v3.mtp-off` package (keeps the VSTest pipeline: `coverlet.collector`, `--logger trx`); `xUnit1051` is suppressed.
 
