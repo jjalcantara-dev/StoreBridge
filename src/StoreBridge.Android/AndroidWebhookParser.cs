@@ -29,10 +29,10 @@ public sealed class AndroidWebhookParser : IWebhookParser
     /// </exception>
     public Task<SubscriptionNotification> ParseAsync(string rawBody, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var (notification, messageId) = AndroidPubSubReader.Parse(rawBody);
-        var eventAt = notification.EventTimeMillis.HasValue
-            ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
-            : (DateTimeOffset?)null;
+        var eventAt = AndroidPubSubReader.FromUnixTimeMilliseconds(notification.EventTimeMillis);
 
         // testNotification is a wiring check sent from Play Console; it has no subscription payload
         if (notification.TestNotification != null && notification.SubscriptionNotification == null)

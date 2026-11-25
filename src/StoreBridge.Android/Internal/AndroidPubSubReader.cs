@@ -35,4 +35,23 @@ internal static class AndroidPubSubReader
             throw new FormatException($"Pub/Sub message is not valid JSON: {ex.Message}", ex);
         }
     }
+
+    /// <summary>
+    /// Converts a Unix millisecond timestamp to <see cref="DateTimeOffset"/>, wrapping out-of-range
+    /// values into <see cref="FormatException"/>.
+    /// </summary>
+    internal static DateTimeOffset? FromUnixTimeMilliseconds(long? millis)
+    {
+        if (!millis.HasValue)
+            return null;
+
+        try
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(millis.Value);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new FormatException($"Unix timestamp '{millis.Value}' is out of range.", ex);
+        }
+    }
 }

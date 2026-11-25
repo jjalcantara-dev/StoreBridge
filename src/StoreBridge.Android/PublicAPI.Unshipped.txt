@@ -47,3 +47,6 @@ static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidSubscrip
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidWebhooks(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Android.AndroidWebhookAuthenticatorOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.get -> string?
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.set -> void
+StoreBridge.Android.AndroidInAppPurchaseVerifier.Dispose() -> void
+StoreBridge.Android.AndroidSubscriptionVerifier.Dispose() -> void
+static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidWebhooks(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

@@ -9,6 +9,8 @@ internal sealed class GoogleTokenValidator : IGoogleTokenValidator
         string expectedAudience,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var settings = new GoogleJsonWebSignature.ValidationSettings
         {
             Audience = [expectedAudience]
@@ -16,6 +18,6 @@ internal sealed class GoogleTokenValidator : IGoogleTokenValidator
 
         // GoogleJsonWebSignature.ValidateAsync fetches and caches Google's public keys internally.
         // It validates: signature, iss (accounts.google.com), aud, exp.
-        return await GoogleJsonWebSignature.ValidateAsync(token, settings);
+        return await GoogleJsonWebSignature.ValidateAsync(token, settings).WaitAsync(cancellationToken);
     }
 }

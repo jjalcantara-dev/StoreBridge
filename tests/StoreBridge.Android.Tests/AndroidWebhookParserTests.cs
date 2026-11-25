@@ -194,6 +194,49 @@ public sealed class AndroidWebhookParserTests
         await Assert.ThrowsAsync<FormatException>(() => new AndroidWebhookParser().ParseAsync("{not json"));
     }
 
+    [Fact]
+    public async Task ParseAsync_StringEncodedEventTimeMillis_ParsesCorrectly()
+    {
+        // Real Google Play RTDN uses Proto3 JSON encoding where int64 eventTimeMillis is a quoted string.
+        var body = BuildPubSubBody(new
+        {
+            version = "1.0",
+            packageName = "com.example.app",
+            eventTimeMillis = "1735689600000",
+            subscriptionNotification = new
+            {
+                version = "1.0",
+                notificationType = 2,
+                purchaseToken = "tok-real",
+                subscriptionId = "pro_monthly"
+            }
+        });
+
+        var result = await new AndroidWebhookParser().ParseAsync(body);
+
+        Assert.Equal(NotificationEventType.Renewed, result.EventType);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1735689600000), result.EventAt);
+    }
+
+    [Fact]
+    public async Task ParseAsync_OutOfRangeEventTimeMillis_ThrowsFormatException()
+    {
+        var body = BuildPubSubBody(new
+        {
+            version = "1.0",
+            packageName = "com.example.app",
+            eventTimeMillis = long.MaxValue.ToString(),
+            subscriptionNotification = new
+            {
+                version = "1.0",
+                notificationType = 2,
+                purchaseToken = "tok-real"
+            }
+        });
+
+        await Assert.ThrowsAsync<FormatException>(() => new AndroidWebhookParser().ParseAsync(body));
+    }
+
     private static string BuildPubSubBody(object notification)
     {
         var json = JsonSerializer.Serialize(notification);

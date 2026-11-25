@@ -14,16 +14,23 @@ namespace StoreBridge.Android;
 /// Verifies Google Play one-time in-app purchases using the Android Publisher API v3
 /// <c>purchases.productsv2</c> endpoint (supports multiple purchase options, offers and partial refunds).
 /// </summary>
-public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
+public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier, IDisposable
 {
     private readonly AndroidInAppPurchaseOptions _options;
-    private readonly Lazy<IAndroidProducts> _client;
     private readonly ILogger<AndroidInAppPurchaseVerifier> _logger;
+    private readonly Lock _clientLock = new();
+    private IAndroidProducts? _client;
+    private AndroidPublisherService? _ownedService;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Android;
 
-    /// <summary>Creates a new verifier using the provided options.</summary>
+    /// <summary>
+    /// Creates a new verifier using the provided options.
+    /// When <paramref name="service"/> is <c>null</c>, an internal <see cref="AndroidPublisherService"/> is created
+    /// lazily and disposed by <see cref="Dispose"/>.
+    /// </summary>
     /// <param name="options">Google Play API configuration.</param>
     /// <param name="service">Optional pre-built service (useful for testing).</param>
     /// <param name="logger">Optional logger; falls back to <see cref="NullLogger{T}"/>.</param>
@@ -34,23 +41,58 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<AndroidInAppPurchaseVerifier>.Instance;
-        _client = service != null
-            ? new Lazy<IAndroidProducts>(() => new GoogleProductsAdapter(service))
-            : new Lazy<IAndroidProducts>(() => new GoogleProductsAdapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)),
-                LazyThreadSafetyMode.PublicationOnly);
+        if (service != null)
+            _client = new GoogleProductsAdapter(service);
     }
 
     /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
     internal AndroidInAppPurchaseVerifier(
         IOptions<AndroidInAppPurchaseOptions> options,
-        ILogger<AndroidInAppPurchaseVerifier> logger)
+        ILogger<AndroidInAppPurchaseVerifier>? logger)
         : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), service: null, logger) { }
 
     internal AndroidInAppPurchaseVerifier(AndroidInAppPurchaseOptions options, IAndroidProducts client)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = NullLogger<AndroidInAppPurchaseVerifier>.Instance;
-        _client = new Lazy<IAndroidProducts>(() => client);
+        _client = client ?? throw new ArgumentNullException(nameof(client));
+    }
+
+    private IAndroidProducts GetClient()
+    {
+        var existing = Volatile.Read(ref _client);
+        if (existing is not null)
+            return existing;
+
+        lock (_clientLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_client is not null)
+                return _client;
+
+            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64);
+            _ownedService = service;
+            var adapter = new GoogleProductsAdapter(service);
+            Volatile.Write(ref _client, adapter);
+            return adapter;
+        }
+    }
+
+    /// <summary>Disposes the internal <see cref="AndroidPublisherService"/> if one was created by this instance.</summary>
+    public void Dispose()
+    {
+        AndroidPublisherService? toDispose;
+        lock (_clientLock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            toDispose = _ownedService;
+            _ownedService = null;
+        }
+
+        toDispose?.Dispose();
     }
 
     /// <summary>
@@ -68,6 +110,8 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
         string? productId = null,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (string.IsNullOrEmpty(_options.PackageName))
             return Task.FromResult(InAppPurchaseVerificationResult.Failure(
                 Store, $"{nameof(AndroidOptions.PackageName)} must be set in options."));
@@ -91,6 +135,7 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
         string purchaseToken,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(packageName))
@@ -100,8 +145,9 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
 
         try
         {
+            var client = GetClient();
             var purchase = await AndroidRetryHelper.ExecuteAsync(
-                ct => _client.Value.GetAsync(packageName, purchaseToken, ct),
+                ct => client.GetAsync(packageName, purchaseToken, ct),
                 _options.MaxRetries,
                 cancellationToken);
 
@@ -140,7 +186,9 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
             _logger.LogError(ex, "Google OAuth token request failed — check the service account key in AndroidOptions.CredentialsBase64");
             return InAppPurchaseVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
         }
-        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException
+                                       or ArgumentException or FormatException
+                                       or System.Text.Json.JsonException or Newtonsoft.Json.JsonException)
         {
             // Malformed base64 or a JSON that is not a service-account key (only when constructed without DI validation)
             _logger.LogError(ex, "Google credentials could not be loaded — check AndroidOptions.CredentialsBase64");
@@ -156,6 +204,8 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
         if (string.IsNullOrEmpty(productId))
         {
             lineItem = lineItems.FirstOrDefault();
+            if (lineItem == null)
+                return InAppPurchaseVerificationResult.Failure(Store, "Purchase contains no product line items.");
         }
         else
         {
@@ -169,7 +219,7 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
             }
         }
 
-        var offer = lineItem?.ProductOfferDetails;
+        var offer = lineItem.ProductOfferDetails;
         var quantity = offer?.Quantity ?? 1;
         var refundable = offer?.RefundableQuantity;
 
@@ -179,7 +229,7 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
             Store = Store,
             Status = MapStatus(purchase.PurchaseStateContext?.PurchaseState, offer?.ConsumptionState, quantity, refundable),
             PurchaseId = purchaseToken,
-            ProductId = lineItem?.ProductId ?? productId ?? string.Empty,
+            ProductId = lineItem.ProductId ?? productId ?? string.Empty,
             OrderId = purchase.OrderId ?? string.Empty,
             PurchasedAt = !string.IsNullOrEmpty(purchase.PurchaseCompletionTimeRaw)
                 ? purchase.PurchaseCompletionTimeDateTimeOffset
