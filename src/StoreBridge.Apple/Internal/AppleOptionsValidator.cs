@@ -10,7 +10,7 @@ namespace StoreBridge.Apple.Internal;
 /// </summary>
 internal static class AppleOptionsValidator
 {
-    internal static ValidateOptionsResult ValidateApi(AppleApiOptions options, string? endpoint = null)
+    internal static ValidateOptionsResult ValidateApi(AppleApiOptions options, string? endpoint = null, string? sandboxEndpoint = null)
     {
         var errors = new List<string>();
 
@@ -54,28 +54,46 @@ internal static class AppleOptionsValidator
         }
 
         if (endpoint is not null)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint))
-                errors.Add("Endpoint base URL is required.");
-            else if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||
-                     (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-                errors.Add($"Endpoint base URL must be an absolute http(s) URI (got '{endpoint}').");
-        }
+            ValidateUrl(endpoint, "Endpoint base URL", errors);
+
+        if (sandboxEndpoint is not null)
+            ValidateUrl(sandboxEndpoint, "Sandbox fallback base URL (disable SandboxFallback to leave it empty)", errors);
 
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
+    }
+
+    private static void ValidateUrl(string url, string label, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            errors.Add($"{label} is required.");
+        else if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            errors.Add($"{label} must be an absolute http(s) URI (got '{url}').");
     }
 }
 
 internal sealed class AppleSubscriptionOptionsValidator : IValidateOptions<AppleSubscriptionOptions>
 {
     public ValidateOptionsResult Validate(string? name, AppleSubscriptionOptions options) =>
-        AppleOptionsValidator.ValidateApi(options, options.SubscriptionsBaseUrl);
+        AppleOptionsValidator.ValidateApi(options, options.SubscriptionsBaseUrl,
+            options.SandboxFallback ? options.SandboxSubscriptionsBaseUrl : null);
 }
 
 internal sealed class AppleInAppPurchaseOptionsValidator : IValidateOptions<AppleInAppPurchaseOptions>
 {
     public ValidateOptionsResult Validate(string? name, AppleInAppPurchaseOptions options) =>
-        AppleOptionsValidator.ValidateApi(options, options.TransactionsBaseUrl);
+        AppleOptionsValidator.ValidateApi(options, options.TransactionsBaseUrl,
+            options.SandboxFallback ? options.SandboxTransactionsBaseUrl : null);
+}
+
+internal sealed class AppleWebhookAuthenticatorOptionsValidator : IValidateOptions<AppleWebhookAuthenticatorOptions>
+{
+    public ValidateOptionsResult Validate(string? name, AppleWebhookAuthenticatorOptions options) =>
+        string.IsNullOrWhiteSpace(options.BundleId)
+            ? ValidateOptionsResult.Fail(
+                $"{nameof(AppleWebhookAuthenticatorOptions.BundleId)} is required: notifications signed by Apple " +
+                "for other apps must be rejected.")
+            : ValidateOptionsResult.Success;
 }

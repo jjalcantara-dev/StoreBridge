@@ -64,7 +64,7 @@ public sealed class AppleServiceCollectionExtensionsTests
     public void AddAppleWebhooks_RegistersAuthenticatorAndParsers()
     {
         var services = new ServiceCollection();
-        services.AddAppleWebhooks();
+        services.AddAppleWebhooks(o => o.BundleId = "com.example.app");
 
         using var sp = services.BuildServiceProvider();
 

@@ -1,4 +1,5 @@
 using Google.Apis.AndroidPublisher.v3;
+using Google.Apis.Auth.OAuth2.Responses;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -32,7 +33,8 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
         _logger = logger ?? NullLogger<AndroidInAppPurchaseVerifier>.Instance;
         _client = service != null
             ? new Lazy<IAndroidProducts>(() => new GoogleProductsAdapter(service))
-            : new Lazy<IAndroidProducts>(() => new GoogleProductsAdapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)));
+            : new Lazy<IAndroidProducts>(() => new GoogleProductsAdapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)),
+                LazyThreadSafetyMode.PublicationOnly);
     }
 
     /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
@@ -146,8 +148,20 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier
             _logger.LogWarning(ex, "Google purchase verification: network error for token {PurchaseToken}", purchaseToken);
             return InAppPurchaseVerificationResult.Failure(Store, $"Google API network error: {ex.Message}");
         }
-        catch (InvalidOperationException ex)
+        catch (TimeoutException ex)
         {
+            _logger.LogWarning(ex, "Google purchase verification timed out for token {PurchaseToken}", purchaseToken);
+            return InAppPurchaseVerificationResult.Failure(Store, ex.Message);
+        }
+        catch (TokenResponseException ex)
+        {
+            // OAuth token exchange failed: key revoked/deleted, clock skew, or service account disabled
+            _logger.LogError(ex, "Google OAuth token request failed — check the service account key in AndroidOptions.CredentialsBase64");
+            return InAppPurchaseVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // Malformed base64 or a JSON that is not a service-account key (only when constructed without DI validation)
             _logger.LogError(ex, "Google credentials could not be loaded — check AndroidOptions.CredentialsBase64");
             return InAppPurchaseVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
         }

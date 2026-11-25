@@ -35,16 +35,17 @@ internal static class AndroidOptionsValidator
 
             if (bytes is not null)
             {
-                // The Google SDK only accepts the JSON service-account format; verify it parses
-                // at startup so an invalid key file doesn't surface as a generic Pub/Sub-time error.
+                // Only service-account keys are accepted (CredentialFactory rejects other credential types such as
+                // external_account configs, which can point at arbitrary files/URLs). Verify it parses at startup
+                // so an invalid key file doesn't surface as a generic error on the first verifier call.
                 try
                 {
                     using var stream = new MemoryStream(bytes);
-#pragma warning disable CS0618 // GoogleCredential.FromStream is the only sync entry point; CredentialFactory replacement is async-only
-                    _ = GoogleCredential.FromStream(stream);
-#pragma warning restore CS0618
+                    _ = CredentialFactory.FromStream<ServiceAccountCredential>(stream);
                 }
-                catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or System.Text.Json.JsonException)
+                catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException
+                                               or ArgumentException or FormatException
+                                               or System.Text.Json.JsonException or Newtonsoft.Json.JsonException)
                 {
                     errors.Add(
                         $"{nameof(AndroidOptions.CredentialsBase64)} is not a valid Google service-account JSON " +
@@ -90,6 +91,20 @@ internal sealed class AndroidWebhookAuthenticatorOptionsValidator : IValidateOpt
             errors.Add(
                 $"{nameof(AndroidWebhookAuthenticatorOptions.WebhookUrl)} must be an absolute http(s) URI " +
                 $"(got '{options.WebhookUrl}').");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ExpectedServiceAccountEmail))
+        {
+            errors.Add(
+                $"{nameof(AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail)} is required. Set it to the " +
+                "service account configured on your Pub/Sub push subscription's authentication — without it any " +
+                "Google-signed ID token minted for your URL would be accepted.");
+        }
+        else if (!options.ExpectedServiceAccountEmail.Contains('@'))
+        {
+            errors.Add(
+                $"{nameof(AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail)} must be an email address " +
+                $"(got '{options.ExpectedServiceAccountEmail}').");
         }
 
         return errors.Count == 0

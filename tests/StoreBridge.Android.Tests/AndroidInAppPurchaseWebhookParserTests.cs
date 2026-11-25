@@ -86,8 +86,33 @@ public sealed class AndroidInAppPurchaseWebhookParserTests
 
         Assert.Equal(InAppPurchaseEventType.Refunded, result.EventType);
         Assert.Equal("voided-token", result.PurchaseId);
-        Assert.Equal("GPA.0000-0000-0000", result.ProductId);
+        Assert.Equal("GPA.0000-0000-0000", result.OrderId);
+        Assert.Equal(string.Empty, result.ProductId);
         Assert.StartsWith("VOIDED:", result.RawEventType);
+    }
+
+    [Fact]
+    public async Task ParseAsync_PendingRefundReviewNotification_MapsToRefundReviewRequested()
+    {
+        var notification = new
+        {
+            version = "1.0",
+            packageName = "com.example",
+            eventTimeMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            pendingRefundReviewNotification = new
+            {
+                version = "1.0",
+                pendingRefundToken = "refund-token-1",
+                orderId = "GPA.1234-5678-9012-34567",
+                refundReason = 7
+            }
+        };
+        var result = await _parser.ParseAsync(BuildPubSubBody(notification));
+
+        Assert.Equal(InAppPurchaseEventType.RefundReviewRequested, result.EventType);
+        Assert.Equal("refund-token-1", result.RefundReviewToken);
+        Assert.Equal("GPA.1234-5678-9012-34567", result.OrderId);
+        Assert.Equal("PENDING_REFUND_REVIEW:7", result.RawEventType);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using StoreBridge.Apple.Internal;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -6,9 +7,10 @@ namespace StoreBridge.Apple;
 
 /// <summary>
 /// Verifies the cryptographic authenticity of App Store Server Notifications v2.
-/// Validates the X.509 certificate chain (x5c) against Apple Root CA - G3 and
-/// verifies the ECDSA (ES256) signature of the signed payload JWT — including the
-/// nested <c>signedTransactionInfo</c> and <c>signedRenewalInfo</c> JWTs.
+/// Validates the X.509 certificate chain (x5c) against Apple Root CA - G3 — including Apple's marker
+/// extensions on the leaf and intermediate certificates — verifies the ECDSA (ES256) signature of the
+/// signed payload JWT and of the nested <c>signedTransactionInfo</c> / <c>signedRenewalInfo</c> JWTs, and
+/// checks that the notification belongs to the configured app (bundle ID, environment, app Apple ID).
 /// </summary>
 public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposable
 {
@@ -32,6 +34,7 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
         "6BgD56KyKA=="
     );
 
+    private readonly AppleWebhookAuthenticatorOptions _options;
     private readonly List<X509Certificate2> _trustedRoots;
 
     /// <inheritdoc />
@@ -40,70 +43,86 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
     /// <summary>
     /// Uses the built-in Apple Root CA - G3 as the trust anchor.
     /// </summary>
-    public AppleWebhookAuthenticator()
-        : this([AppleRootCaG3Der]) { }
+    /// <param name="options">App identity the notifications must belong to. <see cref="AppleWebhookAuthenticatorOptions.BundleId"/> is required.</param>
+    public AppleWebhookAuthenticator(AppleWebhookAuthenticatorOptions options)
+        : this(options, [AppleRootCaG3Der]) { }
 
     /// <summary>
-    /// Uses a custom DER-encoded root CA certificate as the trust anchor.
-    /// Useful for testing or when Apple updates their root CA.
+    /// Uses one or more DER-encoded root CA certificates as trust anchors instead of the built-in one.
+    /// A notification is accepted if its certificate chain anchors to <em>any</em> of the supplied roots —
+    /// useful during an Apple root CA rotation when both the old and new roots must be trusted, or in tests.
     /// </summary>
-    /// <param name="trustedRootDer">
-    /// DER-encoded root CA certificate bytes.
-    /// Download the official cert from https://www.apple.com/certificateauthority/
+    /// <param name="options">App identity the notifications must belong to. <see cref="AppleWebhookAuthenticatorOptions.BundleId"/> is required.</param>
+    /// <param name="trustedRootsDer">
+    /// DER-encoded root CA certificate bytes. Download the official certs from https://www.apple.com/certificateauthority/
     /// </param>
-    public AppleWebhookAuthenticator(byte[] trustedRootDer)
-        : this([trustedRootDer ?? throw new ArgumentNullException(nameof(trustedRootDer))]) { }
-
-    /// <summary>
-    /// Uses one or more DER-encoded root CA certificates as trust anchors. A notification is
-    /// accepted if its certificate chain anchors to <em>any</em> of the supplied roots — useful
-    /// during an Apple root CA rotation when both the old and new roots must be trusted.
-    /// </summary>
-    /// <param name="trustedRootsDer">DER-encoded root CA certificate bytes.</param>
-    public AppleWebhookAuthenticator(IEnumerable<byte[]> trustedRootsDer)
+    public AppleWebhookAuthenticator(AppleWebhookAuthenticatorOptions options, IEnumerable<byte[]> trustedRootsDer)
     {
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedRootsDer);
 
+        if (string.IsNullOrWhiteSpace(options.BundleId))
+            throw new ArgumentException(
+                $"{nameof(AppleWebhookAuthenticatorOptions.BundleId)} must be set.", nameof(options));
+
+        _options = options;
         _trustedRoots = trustedRootsDer
             .Select(der => der ?? throw new ArgumentException("Trusted root entry cannot be null.", nameof(trustedRootsDer)))
-            .Select(LoadCertificate)
+            .Select(X509CertificateLoader.LoadCertificate)
             .ToList();
 
         if (_trustedRoots.Count == 0)
             throw new ArgumentException("At least one trusted root certificate must be supplied.", nameof(trustedRootsDer));
     }
 
-    private static X509Certificate2 LoadCertificate(byte[] der) =>
-#if NET9_0_OR_GREATER
-        X509CertificateLoader.LoadCertificate(der);
-#else
-        new(der);
-#endif
+    /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
+    internal AppleWebhookAuthenticator(IOptions<AppleWebhookAuthenticatorOptions> options)
+        : this(options?.Value ?? throw new ArgumentNullException(nameof(options))) { }
 
     /// <summary>
-    /// Validates the App Store Server Notification by verifying the X.509 certificate
-    /// chain (x5c) and the ECDSA signature of the signed payload JWT, then verifying the
-    /// nested <c>signedTransactionInfo</c> and <c>signedRenewalInfo</c> JWTs the same way.
-    /// The <paramref name="bearerToken"/> parameter is unused for Apple — the signature
-    /// is self-contained inside the JWT.
+    /// Validates the App Store Server Notification: certificate chain and ECDSA signature of the signed
+    /// payload JWT and of the nested <c>signedTransactionInfo</c> / <c>signedRenewalInfo</c> JWTs, then the
+    /// app identity (bundle ID, environment, app Apple ID). The <paramref name="bearerToken"/> parameter is
+    /// unused for Apple — the signature is self-contained inside the JWT.
     /// </summary>
     /// <param name="rawBody">The raw webhook request body.</param>
     /// <param name="bearerToken">Unused for Apple.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="WebhookAuthenticationException">
-    /// Thrown when a certificate chain is invalid, does not chain to a trusted Apple root,
-    /// or when a JWT signature does not match.
+    /// Thrown when a certificate chain is invalid or does not chain to a trusted Apple root, when a JWT
+    /// signature does not match, or when the notification is for another app or a disallowed environment.
     /// </exception>
     public Task ValidateAsync(string rawBody, string? bearerToken = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(rawBody))
             throw new ArgumentException("Webhook body cannot be empty.", nameof(rawBody));
 
-        var signedPayload = ExtractSignedPayload(rawBody);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var signedPayload = AppleJwtHelper.ExtractSignedPayload(rawBody);
         AppleCertificateChainValidator.ValidateSignature(signedPayload, _trustedRoots);
 
-        foreach (var nested in ExtractNestedSignedJwts(signedPayload))
-            AppleCertificateChainValidator.ValidateSignature(nested, _trustedRoots);
+        AppStoreNotificationPayload payload;
+        try
+        {
+            payload = AppleJwtHelper.DecodePayload<AppStoreNotificationPayload>(signedPayload)
+                ?? throw new WebhookAuthenticationException("Apple notification payload is empty.");
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
+        {
+            throw new WebhookAuthenticationException("Apple notification payload could not be decoded.", ex);
+        }
+
+        var environment = ValidateAppIdentity(payload);
+
+        if (!string.IsNullOrEmpty(payload.Data?.SignedTransactionInfo))
+        {
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedTransactionInfo, _trustedRoots);
+            ValidateNestedTransaction(payload.Data.SignedTransactionInfo, environment);
+        }
+
+        if (!string.IsNullOrEmpty(payload.Data?.SignedRenewalInfo))
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedRenewalInfo, _trustedRoots);
 
         return Task.CompletedTask;
     }
@@ -115,58 +134,68 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
             root.Dispose();
     }
 
-    private static string ExtractSignedPayload(string rawBody)
+    /// <summary>Checks bundle ID, environment and app Apple ID of the outer payload. Returns the environment.</summary>
+    private string? ValidateAppIdentity(AppStoreNotificationPayload payload)
     {
-        if (!rawBody.TrimStart().StartsWith('{'))
-            return rawBody.Trim();
+        string? bundleId;
+        string? environment;
+        long? appAppleId;
 
-        using var doc = JsonDocument.Parse(rawBody);
-        if (!doc.RootElement.TryGetProperty("signedPayload", out var sp))
-            throw new FormatException("Missing 'signedPayload' field in webhook body.");
-
-        return sp.GetString() ?? throw new FormatException("'signedPayload' is null.");
-    }
-
-    /// <summary>
-    /// Decodes the (already signature-checked) outer payload and returns the nested
-    /// <c>signedTransactionInfo</c> / <c>signedRenewalInfo</c> JWTs that are present.
-    /// </summary>
-    private static IEnumerable<string> ExtractNestedSignedJwts(string outerJwt)
-    {
-        var parts = outerJwt.Split('.');
-        if (parts.Length != 3)
-            throw new WebhookAuthenticationException("Invalid JWT format: expected 3 parts.");
-
-        var payloadBytes = Base64UrlDecode(parts[1]);
-        using var doc = JsonDocument.Parse(payloadBytes);
-
-        if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        if (data.TryGetProperty("signedTransactionInfo", out var tx)
-            && tx.ValueKind == JsonValueKind.String
-            && !string.IsNullOrEmpty(tx.GetString()))
+        if (payload.Data is { } data)
         {
-            yield return tx.GetString()!;
+            (bundleId, environment, appAppleId) = (data.BundleId, data.Environment, data.AppAppleId);
+        }
+        else if (payload.Summary is { } summary)
+        {
+            (bundleId, environment, appAppleId) = (summary.BundleId, summary.Environment, summary.AppAppleId);
+        }
+        else if (payload.ExternalPurchaseToken is { } token)
+        {
+            // External purchase tokens carry no environment field; sandbox IDs are prefixed with "SANDBOX".
+            var sandbox = token.ExternalPurchaseId?.StartsWith("SANDBOX", StringComparison.Ordinal) == true;
+            (bundleId, environment, appAppleId) = (token.BundleId, sandbox ? "Sandbox" : "Production", token.AppAppleId);
+        }
+        else
+        {
+            throw new WebhookAuthenticationException(
+                "Apple notification carries no app identity (no 'data', 'summary' or 'externalPurchaseToken').");
         }
 
-        if (data.TryGetProperty("signedRenewalInfo", out var renewal)
-            && renewal.ValueKind == JsonValueKind.String
-            && !string.IsNullOrEmpty(renewal.GetString()))
-        {
-            yield return renewal.GetString()!;
-        }
+        if (!string.Equals(bundleId, _options.BundleId, StringComparison.Ordinal))
+            throw new WebhookAuthenticationException(
+                $"Apple notification is for bundle '{bundleId ?? "(none)"}', expected '{_options.BundleId}'.");
+
+        var nonProduction = AppleJwtHelper.IsNonProduction(environment);
+        if (nonProduction && !_options.AllowSandbox)
+            throw new WebhookAuthenticationException(
+                $"Apple notification is from the '{environment}' environment and sandbox notifications are not allowed.");
+
+        if (!nonProduction && _options.AppAppleId is { } expectedAppId && appAppleId != expectedAppId)
+            throw new WebhookAuthenticationException(
+                $"Apple notification is for app Apple ID '{appAppleId?.ToString() ?? "(none)"}', expected '{expectedAppId}'.");
+
+        return environment;
     }
 
-    private static byte[] Base64UrlDecode(string input)
+    private void ValidateNestedTransaction(string signedTransactionInfo, string? outerEnvironment)
     {
-        var s = input.Replace('-', '+').Replace('_', '/');
-        s = (s.Length % 4) switch
+        DecodedTransactionInfo? tx;
+        try
         {
-            2 => s + "==",
-            3 => s + "=",
-            _ => s
-        };
-        return Convert.FromBase64String(s);
+            tx = AppleJwtHelper.DecodePayload<DecodedTransactionInfo>(signedTransactionInfo);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
+        {
+            throw new WebhookAuthenticationException("Apple signedTransactionInfo could not be decoded.", ex);
+        }
+
+        if (tx?.BundleId is { } txBundle && !string.Equals(txBundle, _options.BundleId, StringComparison.Ordinal))
+            throw new WebhookAuthenticationException(
+                $"Apple signedTransactionInfo is for bundle '{txBundle}', expected '{_options.BundleId}'.");
+
+        if (tx?.Environment is { } txEnv && outerEnvironment is not null &&
+            !string.Equals(txEnv, outerEnvironment, StringComparison.OrdinalIgnoreCase))
+            throw new WebhookAuthenticationException(
+                $"Apple signedTransactionInfo environment '{txEnv}' does not match the notification environment '{outerEnvironment}'.");
     }
 }

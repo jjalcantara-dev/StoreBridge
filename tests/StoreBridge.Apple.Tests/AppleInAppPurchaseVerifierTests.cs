@@ -215,9 +215,9 @@ public sealed class AppleInAppPurchaseVerifierTests
     public async Task VerifyPurchaseAsync_4xxResponse_DoesNotRetry()
     {
         var handler = new FakeHttpMessageHandler(
-            (HttpStatusCode.NotFound, "{}"),
-            (HttpStatusCode.NotFound, "{}"),
-            (HttpStatusCode.NotFound, "{}"));
+            (HttpStatusCode.Unauthorized, "{}"),
+            (HttpStatusCode.Unauthorized, "{}"),
+            (HttpStatusCode.Unauthorized, "{}"));
         var options = BuildOptions(maxRetries: 3);
         using var verifier = new AppleInAppPurchaseVerifier(options, new HttpClient(handler));
 
@@ -239,5 +239,112 @@ public sealed class AppleInAppPurchaseVerifierTests
 
         Assert.Equal(2, handler.CallCount);
         Assert.True(result.IsVerified);
+    }
+
+    // ── sandbox fallback ────────────────────────────────────────
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_ProductionNotFound_FallsBackToSandbox()
+    {
+        var handler = new FakeHttpMessageHandler(
+            (HttpStatusCode.NotFound, """{"errorCode":4040010,"errorMessage":"Transaction id not found."}"""),
+            (HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleInAppPurchaseVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifyPurchaseAsync("2000000000000001", "coins_100");
+
+        Assert.True(result.IsVerified);
+        Assert.Equal(2, handler.CallCount);
+        Assert.StartsWith("https://api.storekit.itunes.apple.com/", handler.RequestUris[0].ToString());
+        Assert.StartsWith("https://api.storekit-sandbox.itunes.apple.com/", handler.RequestUris[1].ToString());
+    }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_SandboxFallbackDisabled_DoesNotRetrySandbox()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.NotFound, "{}"));
+        var options = BuildOptions();
+        options.SandboxFallback = false;
+        using var verifier = new AppleInAppPurchaseVerifier(options, new HttpClient(handler));
+
+        var result = await verifier.VerifyPurchaseAsync("2000000000000001", "coins_100");
+
+        Assert.False(result.IsVerified);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_TransactionIdIsEscapedInPath()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleInAppPurchaseVerifier(BuildOptions(), new HttpClient(handler));
+
+        await verifier.VerifyPurchaseAsync("../../v2/history/1", "coins_100");
+
+        Assert.Equal("/inApps/v1/transactions/..%2F..%2Fv2%2Fhistory%2F1", handler.RequestUris[0].AbsolutePath);
+    }
+
+    // ── transient failures ──────────────────────────────────────
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_429ThenSuccess_Retries()
+    {
+        var handler = new FakeHttpMessageHandler(
+            (HttpStatusCode.TooManyRequests, "{}"),
+            (HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleInAppPurchaseVerifier(BuildOptions(maxRetries: 2), new HttpClient(handler));
+
+        var result = await verifier.VerifyPurchaseAsync("token", "coins_100");
+
+        Assert.True(result.IsVerified);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_HttpClientTimeout_ReturnsFailureInsteadOfThrowing()
+    {
+        // HttpClient.Timeout surfaces as TaskCanceledException even though the caller did not cancel
+        var handler = new FakeHttpMessageHandler(
+            ((HttpStatusCode)0, "", (Exception?)new TaskCanceledException("timeout", new TimeoutException())));
+        using var verifier = new AppleInAppPurchaseVerifier(BuildOptions(maxRetries: 1), new HttpClient(handler));
+
+        var result = await verifier.VerifyPurchaseAsync("token", "coins_100");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("timed out", result.ErrorMessage);
+    }
+
+    // ── bearer token ────────────────────────────────────────────
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_SendsValidEs256BearerToken()
+    {
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var options = BuildOptions();
+        options.PrivateKeyBase64 = Convert.ToBase64String(key.ExportPkcs8PrivateKey());
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleInAppPurchaseVerifier(options, new HttpClient(handler));
+
+        await verifier.VerifyPurchaseAsync("token", "coins_100");
+
+        var parts = handler.LastBearerToken!.Split('.');
+        Assert.Equal(3, parts.Length);
+        var valid = key.VerifyData(System.Text.Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}"),
+            System.Buffers.Text.Base64Url.DecodeFromChars(parts[2]),
+            System.Security.Cryptography.HashAlgorithmName.SHA256,
+            System.Security.Cryptography.DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        Assert.True(valid);
+
+        using var header = JsonDocument.Parse(System.Buffers.Text.Base64Url.DecodeFromChars(parts[0]));
+        Assert.Equal("ES256", header.RootElement.GetProperty("alg").GetString());
+        Assert.Equal(options.KeyId, header.RootElement.GetProperty("kid").GetString());
+
+        using var claims = JsonDocument.Parse(System.Buffers.Text.Base64Url.DecodeFromChars(parts[1]));
+        Assert.Equal("appstoreconnect-v1", claims.RootElement.GetProperty("aud").GetString());
+        Assert.Equal(options.IssuerId, claims.RootElement.GetProperty("iss").GetString());
+        Assert.Equal(options.BundleId, claims.RootElement.GetProperty("bid").GetString());
+        var iat = claims.RootElement.GetProperty("iat").GetInt64();
+        var exp = claims.RootElement.GetProperty("exp").GetInt64();
+        Assert.InRange(exp - iat, 1, 3600);
     }
 }

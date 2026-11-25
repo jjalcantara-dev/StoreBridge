@@ -2,7 +2,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StoreBridge.Apple.Internal;
-using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace StoreBridge.Apple;
@@ -56,11 +55,15 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
 
     /// <summary>
     /// Verifies a subscription by its original transaction ID.
-    /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors.
+    /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors and, when
+    /// <see cref="AppleApiOptions.SandboxFallback"/> is on, retries a production 404 against the sandbox.
     /// The JWT is generated once and reused across retries.
     /// </summary>
     /// <param name="receiptOrToken">The original transaction ID from the App Store.</param>
-    /// <param name="productId">Optional. If provided, only the transaction matching that product ID is returned.</param>
+    /// <param name="productId">
+    /// Optional. If provided, only the transaction for that product ID is considered; when the transaction
+    /// belongs to other products only, the result is a failure (no silent fallback to another product).
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<SubscriptionVerificationResult> VerifySubscriptionAsync(
         string receiptOrToken,
@@ -85,10 +88,15 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             return SubscriptionVerificationResult.Failure(Store, ex.Message);
         }
 
+        string content;
         try
         {
-            return await AppleRetryHelper.ExecuteAsync(
-                ct => VerifyInternalAsync(jwtToken, receiptOrToken, productId, ct),
+            content = await AppleApiClient.GetAsync(
+                ResolveClient(),
+                jwtToken,
+                _options.SubscriptionsBaseUrl,
+                _options.SandboxFallback ? _options.SandboxSubscriptionsBaseUrl : null,
+                receiptOrToken,
                 _options.MaxRetries,
                 cancellationToken);
         }
@@ -101,7 +109,17 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             _logger.LogWarning(ex, "Apple subscription verification failed for transaction {TransactionId}", receiptOrToken);
             return SubscriptionVerificationResult.Failure(Store, $"Apple API error: {ex.Message}");
         }
-        catch (JsonException ex)
+        catch (TimeoutException ex)
+        {
+            _logger.LogWarning(ex, "Apple subscription verification timed out for transaction {TransactionId}", receiptOrToken);
+            return SubscriptionVerificationResult.Failure(Store, ex.Message);
+        }
+
+        try
+        {
+            return MapToResult(content, receiptOrToken, productId);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
         {
             _logger.LogWarning(ex, "Apple subscription verification: response body could not be parsed for {TransactionId}", receiptOrToken);
             return SubscriptionVerificationResult.Failure(Store, $"Apple API returned a malformed response: {ex.Message}");
@@ -115,38 +133,29 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             _httpClient?.Dispose();
     }
 
-    private async Task<SubscriptionVerificationResult> VerifyInternalAsync(
-        string jwtToken,
-        string originalTransactionId,
-        string? productId,
-        CancellationToken cancellationToken)
+    private SubscriptionVerificationResult MapToResult(string content, string originalTransactionId, string? productId)
     {
-        var url = $"{_options.SubscriptionsBaseUrl.TrimEnd('/')}/{originalTransactionId}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwtToken);
-
-        var response = await ResolveClient().SendAsync(request, cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new HttpRequestException(
-                $"Apple API returned {(int)response.StatusCode}: {body}",
-                inner: null,
-                statusCode: response.StatusCode);
-        }
-
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         var parsed = JsonSerializer.Deserialize<AppStoreSubscriptionResponse>(content);
 
         var allTransactions = parsed?.Data?
             .SelectMany(d => d.LastTransactions ?? [])
             .ToList() ?? [];
 
-        var lastTransaction = productId == null
-            ? allTransactions.FirstOrDefault()
-            : allTransactions.FirstOrDefault(t => string.Equals(t.ProductId, productId, StringComparison.Ordinal))
-              ?? allTransactions.FirstOrDefault();
+        LastTransaction? lastTransaction;
+        if (productId == null)
+        {
+            lastTransaction = allTransactions.FirstOrDefault();
+        }
+        else
+        {
+            // Never fall back to a different product: a client could otherwise present the token of a
+            // cheap subscription while asking to unlock an expensive one.
+            lastTransaction = allTransactions.FirstOrDefault(t => string.Equals(t.ProductId, productId, StringComparison.Ordinal));
+            if (lastTransaction == null && allTransactions.Count > 0)
+                return SubscriptionVerificationResult.Failure(Store,
+                    $"No subscription for product '{productId}' found for this transaction " +
+                    $"(found: {string.Join(", ", allTransactions.Select(t => t.ProductId))}).");
+        }
 
         if (lastTransaction?.SignedTransactionInfo == null)
             return SubscriptionVerificationResult.Failure(Store, "No transaction info found in Apple response.");
@@ -159,7 +168,9 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         if (!string.IsNullOrEmpty(lastTransaction.SignedRenewalInfo))
             renewalInfo = AppleJwtHelper.DecodePayload<DecodedRenewalInfo>(lastTransaction.SignedRenewalInfo);
 
-        var status = AppleStatusMapper.Map(lastTransaction.Status);
+        // autoRenewStatus 0 = off (user/App Store disabled), 1 = on
+        var autoRenewOff = renewalInfo?.AutoRenewStatus == 0;
+        var status = AppleStatusMapper.Map(lastTransaction.Status, autoRenewOff);
         var priceAmount = info.Price ?? 0;
 
         return new SubscriptionVerificationResult
@@ -179,14 +190,13 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             PriceAmount = priceAmount,
             CurrencyCode = info.Currency ?? string.Empty,
             PriceDecimal = PriceConverter.FromApplePrice(priceAmount),
-            // autoRenewStatus 0 = off (user disabled), 1 = on
-            CancelledByUser = renewalInfo?.AutoRenewStatus == 0,
+            CancelledByUser = autoRenewOff,
             AutoRenewProductId = renewalInfo?.AutoRenewProductId ?? string.Empty,
             GracePeriodExpiresAt = renewalInfo?.GracePeriodExpiresDate.HasValue == true
                 ? DateTimeOffset.FromUnixTimeMilliseconds(renewalInfo.GracePeriodExpiresDate!.Value)
                 : null,
-            IsSandbox = string.Equals(info.Environment, "Sandbox", StringComparison.OrdinalIgnoreCase)
-                     || string.Equals(parsed?.Environment, "Sandbox", StringComparison.OrdinalIgnoreCase)
+            IsSandbox = AppleJwtHelper.IsNonProduction(info.Environment)
+                     || AppleJwtHelper.IsNonProduction(parsed?.Environment)
         };
     }
 

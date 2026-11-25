@@ -2,7 +2,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StoreBridge.Apple.Internal;
-using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace StoreBridge.Apple;
@@ -56,7 +55,8 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
 
     /// <summary>
     /// Verifies a one-time purchase by its transaction ID.
-    /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors.
+    /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors and, when
+    /// <see cref="AppleApiOptions.SandboxFallback"/> is on, retries a production 404 against the sandbox.
     /// The JWT is generated once and reused across retries.
     /// </summary>
     /// <param name="purchaseToken">The transaction ID from the App Store.</param>
@@ -84,10 +84,15 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             return InAppPurchaseVerificationResult.Failure(Store, ex.Message);
         }
 
+        string content;
         try
         {
-            return await AppleRetryHelper.ExecuteAsync(
-                ct => VerifyInternalAsync(jwtToken, purchaseToken, productId, ct),
+            content = await AppleApiClient.GetAsync(
+                ResolveClient(),
+                jwtToken,
+                _options.TransactionsBaseUrl,
+                _options.SandboxFallback ? _options.SandboxTransactionsBaseUrl : null,
+                purchaseToken,
                 _options.MaxRetries,
                 cancellationToken);
         }
@@ -100,7 +105,17 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             _logger.LogWarning(ex, "Apple in-app purchase verification failed for transaction {TransactionId}", purchaseToken);
             return InAppPurchaseVerificationResult.Failure(Store, $"Apple API error: {ex.Message}");
         }
-        catch (JsonException ex)
+        catch (TimeoutException ex)
+        {
+            _logger.LogWarning(ex, "Apple in-app purchase verification timed out for transaction {TransactionId}", purchaseToken);
+            return InAppPurchaseVerificationResult.Failure(Store, ex.Message);
+        }
+
+        try
+        {
+            return MapToResult(content, purchaseToken, productId);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
         {
             _logger.LogWarning(ex, "Apple in-app purchase verification: response body could not be parsed for {TransactionId}", purchaseToken);
             return InAppPurchaseVerificationResult.Failure(Store, $"Apple API returned a malformed response: {ex.Message}");
@@ -114,28 +129,8 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             _httpClient?.Dispose();
     }
 
-    private async Task<InAppPurchaseVerificationResult> VerifyInternalAsync(
-        string jwtToken,
-        string transactionId,
-        string? productId,
-        CancellationToken cancellationToken)
+    private InAppPurchaseVerificationResult MapToResult(string content, string transactionId, string? productId)
     {
-        var url = $"{_options.TransactionsBaseUrl.TrimEnd('/')}/{transactionId}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwtToken);
-
-        var response = await ResolveClient().SendAsync(request, cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new HttpRequestException(
-                $"Apple API returned {(int)response.StatusCode}: {body}",
-                inner: null,
-                statusCode: response.StatusCode);
-        }
-
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         var parsed = JsonSerializer.Deserialize<AppStoreTransactionResponse>(content);
 
         if (string.IsNullOrEmpty(parsed?.SignedTransactionInfo))
@@ -168,7 +163,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             PriceAmount = priceAmount,
             CurrencyCode = info.Currency ?? string.Empty,
             PriceDecimal = PriceConverter.FromApplePrice(priceAmount),
-            IsSandbox = string.Equals(info.Environment, "Sandbox", StringComparison.OrdinalIgnoreCase)
+            IsSandbox = AppleJwtHelper.IsNonProduction(info.Environment)
         };
     }
 }

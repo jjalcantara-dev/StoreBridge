@@ -46,6 +46,9 @@ internal sealed class DecodedTransactionInfo
     [JsonPropertyName("transactionId")]
     public string? TransactionId { get; set; }
 
+    [JsonPropertyName("bundleId")]
+    public string? BundleId { get; set; }
+
     [JsonPropertyName("productId")]
     public string? ProductId { get; set; }
 
@@ -130,10 +133,19 @@ internal sealed class AppStoreNotificationPayload
 
     [JsonPropertyName("notificationUUID")]
     public string? NotificationUUID { get; set; }
+
+    [JsonPropertyName("summary")]
+    public NotificationSummary? Summary { get; set; }
+
+    [JsonPropertyName("externalPurchaseToken")]
+    public ExternalPurchaseTokenData? ExternalPurchaseToken { get; set; }
 }
 
 internal sealed class NotificationData
 {
+    [JsonPropertyName("appAppleId")]
+    public long? AppAppleId { get; set; }
+
     [JsonPropertyName("bundleId")]
     public string? BundleId { get; set; }
 
@@ -148,4 +160,30 @@ internal sealed class NotificationData
 
     [JsonPropertyName("signedRenewalInfo")]
     public string? SignedRenewalInfo { get; set; }
+}
+
+/// <summary>Present instead of <c>data</c> for <c>RENEWAL_EXTENSION</c> / <c>SUMMARY</c> notifications.</summary>
+internal sealed class NotificationSummary
+{
+    [JsonPropertyName("appAppleId")]
+    public long? AppAppleId { get; set; }
+
+    [JsonPropertyName("bundleId")]
+    public string? BundleId { get; set; }
+
+    [JsonPropertyName("environment")]
+    public string? Environment { get; set; }
+}
+
+/// <summary>Present instead of <c>data</c> for <c>EXTERNAL_PURCHASE_TOKEN</c> notifications.</summary>
+internal sealed class ExternalPurchaseTokenData
+{
+    [JsonPropertyName("appAppleId")]
+    public long? AppAppleId { get; set; }
+
+    [JsonPropertyName("bundleId")]
+    public string? BundleId { get; set; }
+
+    [JsonPropertyName("externalPurchaseId")]
+    public string? ExternalPurchaseId { get; set; }
 }

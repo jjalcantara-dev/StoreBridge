@@ -39,9 +39,11 @@ public sealed class AndroidWebhookParserTests
     [InlineData(4, NotificationEventType.Created)]
     [InlineData(5, NotificationEventType.InBillingRetry)]
     [InlineData(6, NotificationEventType.GracePeriod)]
-    [InlineData(7, NotificationEventType.Renewed)]
+    [InlineData(7, NotificationEventType.AutoRenewEnabled)]
     [InlineData(12, NotificationEventType.Refunded)]
     [InlineData(13, NotificationEventType.Expired)]
+    [InlineData(18, NotificationEventType.AutoRenewDisabled)]
+    [InlineData(22, NotificationEventType.Other)]
     [InlineData(99, NotificationEventType.Other)]
     public async Task ParseAsync_MapsNotificationTypeCorrectly(int notificationType, NotificationEventType expected)
     {
@@ -61,6 +63,7 @@ public sealed class AndroidWebhookParserTests
     [InlineData(6, SubscriptionStatus.InGracePeriod)]
     [InlineData(12, SubscriptionStatus.Revoked)]
     [InlineData(13, SubscriptionStatus.Expired)]
+    [InlineData(18, SubscriptionStatus.Cancelled)]
     public async Task ParseAsync_MapsStatusCorrectly(int notificationType, SubscriptionStatus expected)
     {
         var body = BuildSubscriptionNotificationBody("com.example.app", notificationType, "token123", "sub_id");
@@ -150,6 +153,45 @@ public sealed class AndroidWebhookParserTests
         };
 
         return BuildPubSubBody(notification);
+    }
+
+    [Fact]
+    public async Task ParseAsync_VoidedSubscription_MapsToRefundedRevoked()
+    {
+        var body = BuildPubSubBody(new
+        {
+            version = "1.0",
+            packageName = "com.example.app",
+            eventTimeMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            voidedPurchaseNotification = new { purchaseToken = "sub-token", orderId = "GPA.1", productType = 1, refundType = 1 }
+        });
+
+        var result = await new AndroidWebhookParser().ParseAsync(body);
+
+        Assert.Equal(NotificationEventType.Refunded, result.EventType);
+        Assert.Equal(SubscriptionStatus.Revoked, result.Status);
+        Assert.Equal("sub-token", result.SubscriptionId);
+    }
+
+    [Fact]
+    public async Task ParseAsync_VoidedOneTimePurchase_ThrowsFormatException()
+    {
+        // productType 2 = one-time product → belongs to AndroidInAppPurchaseWebhookParser
+        var body = BuildPubSubBody(new
+        {
+            version = "1.0",
+            packageName = "com.example.app",
+            eventTimeMillis = 1L,
+            voidedPurchaseNotification = new { purchaseToken = "iap-token", orderId = "GPA.2", productType = 2, refundType = 1 }
+        });
+
+        await Assert.ThrowsAsync<FormatException>(() => new AndroidWebhookParser().ParseAsync(body));
+    }
+
+    [Fact]
+    public async Task ParseAsync_InvalidJson_ThrowsFormatException()
+    {
+        await Assert.ThrowsAsync<FormatException>(() => new AndroidWebhookParser().ParseAsync("{not json"));
     }
 
     private static string BuildPubSubBody(object notification)

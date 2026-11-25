@@ -15,12 +15,14 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 // Apple — bind from the "Apple" configuration section (use user-secrets for the real values).
 builder.Services.AddAppleSubscriptions(builder.Configuration.GetSection("Apple"));
 builder.Services.AddAppleInAppPurchases(builder.Configuration.GetSection("Apple"));
-builder.Services.AddAppleWebhooks();
+builder.Services.AddAppleWebhooks(builder.Configuration.GetSection("Apple:Webhook"));
 
 // Google — bind from the "Google" configuration section.
 builder.Services.AddAndroidSubscriptions(builder.Configuration.GetSection("Google"));
 builder.Services.AddAndroidInAppPurchases(builder.Configuration.GetSection("Google"));
 builder.Services.AddAndroidWebhooks(o => builder.Configuration.GetSection("Google:Webhook").Bind(o));
+// Note: the webhook authenticators validate their options on first use — an empty Apple:Webhook:BundleId or
+// Google:Webhook:ExpectedServiceAccountEmail fails with an OptionsValidationException explaining what to set.
 
 var app = builder.Build();
 
@@ -59,6 +61,11 @@ app.MapPost("/webhooks/apple", async (
         logger.LogWarning(ex, "Apple webhook authentication failed");
         return Results.Unauthorized();
     }
+    catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+    {
+        logger.LogWarning(ex, "Apple webhook body is malformed");
+        return Results.BadRequest();
+    }
 
     var notification = await parser.ParseAsync(body);
     logger.LogInformation("Apple notification {Id}: {Event} ({Raw})",
@@ -85,7 +92,7 @@ app.MapPost("/webhooks/google", async (
         return Results.Unauthorized();
     }
 
-    // A Pub/Sub message is a subscription, a one-time product, a voided purchase, or a test.
+    // A Pub/Sub message is a subscription, a one-time product, a voided purchase, a refund review, or a test.
     // Try the subscription parser; fall back to the in-app purchase parser.
     try
     {
@@ -96,10 +103,19 @@ app.MapPost("/webhooks/google", async (
     }
     catch (FormatException)
     {
-        var notification = await purchaseParser.ParseAsync(body);
-        logger.LogInformation("Google purchase notification {Id}: {Event}",
-            notification.NotificationId, notification.EventType);
-        return Results.Ok(notification);
+        try
+        {
+            var notification = await purchaseParser.ParseAsync(body);
+            logger.LogInformation("Google purchase notification {Id}: {Event}",
+                notification.NotificationId, notification.EventType);
+            return Results.Ok(notification);
+        }
+        catch (FormatException ex)
+        {
+            // Unknown or future notification kind: acknowledge it (2xx) so Pub/Sub doesn't redeliver it forever.
+            logger.LogWarning(ex, "Unrecognized Google notification acknowledged without processing");
+            return Results.Ok();
+        }
     }
 });
 

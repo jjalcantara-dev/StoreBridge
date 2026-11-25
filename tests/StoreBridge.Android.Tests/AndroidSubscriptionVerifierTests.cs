@@ -51,21 +51,137 @@ public sealed class AndroidSubscriptionVerifierTests
     }
 
     [Fact]
-    public async Task VerifyAsync_CanceledState_StillReturnsActive()
+    public async Task VerifyAsync_CanceledState_ReturnsCancelledAndStillGrantsAccess()
     {
-        // CANCELED = user cancelled but still within the paid billing period
+        // CANCELED = auto-renew off but still within the paid billing period
         var client = Substitute.For<IAndroidSubscriptionsv2>();
         client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new SubscriptionPurchaseV2
             {
                 SubscriptionState = "SUBSCRIPTION_STATE_CANCELED",
+                CanceledStateContext = new CanceledStateContext { UserInitiatedCancellation = new UserInitiatedCancellation() },
                 LineItems = [LineItem("premium_monthly", DateTimeOffset.UtcNow.AddDays(10))]
             });
 
         var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
 
-        Assert.Equal(SubscriptionStatus.Active, result.Status);
+        Assert.Equal(SubscriptionStatus.Cancelled, result.Status);
+        Assert.True(result.Status.GrantsAccess());
         Assert.True(result.CancelledByUser);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_SystemCancelled_IsNotCancelledByUser()
+    {
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new SubscriptionPurchaseV2
+            {
+                SubscriptionState = "SUBSCRIPTION_STATE_CANCELED",
+                CanceledStateContext = new CanceledStateContext { SystemInitiatedCancellation = new SystemInitiatedCancellation() },
+                LineItems = [LineItem("premium_monthly", DateTimeOffset.UtcNow.AddDays(10))]
+            });
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.Equal(SubscriptionStatus.Cancelled, result.Status);
+        Assert.False(result.CancelledByUser);
+    }
+
+    [Theory]
+    [InlineData("SUBSCRIPTION_STATE_ON_HOLD", SubscriptionStatus.InBillingRetry)]
+    [InlineData("SUBSCRIPTION_STATE_PAUSED", SubscriptionStatus.Unknown)]
+    [InlineData("SUBSCRIPTION_STATE_IN_GRACE_PERIOD", SubscriptionStatus.InGracePeriod)]
+    public async Task VerifyAsync_StateWinsOverPastExpiry(string state, SubscriptionStatus expected)
+    {
+        // During account hold / pause the line item's expiryTime is already in the past
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new SubscriptionPurchaseV2
+            {
+                SubscriptionState = state,
+                LineItems = [LineItem("premium_monthly", DateTimeOffset.UtcNow.AddDays(-3))]
+            });
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.Equal(expected, result.Status);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ProductNotInLineItems_FailsInsteadOfFallingBack()
+    {
+        // Token is for premium_monthly; the client claims premium_yearly → must not verify
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ActiveSub("premium_monthly"));
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_yearly", "token-001");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("premium_yearly", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_RecurringPrice_IsMappedToMicros()
+    {
+        var sub = ActiveSub();
+        sub.LineItems[0].AutoRenewingPlan = new AutoRenewingPlan
+        {
+            AutoRenewEnabled = true,
+            RecurringPrice = new Money { CurrencyCode = "EUR", Units = 4, Nanos = 990_000_000 }
+        };
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(sub);
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.Equal(4_990_000, result.PriceAmount);
+        Assert.Equal(4.99m, result.PriceDecimal);
+        Assert.Equal("EUR", result.CurrencyCode);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_OAuthTokenFailure_ReturnsFailure()
+    {
+        // e.g. the service-account key was deleted → invalid_grant during the token exchange
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new Google.Apis.Auth.OAuth2.Responses.TokenResponseException(
+                new Google.Apis.Auth.OAuth2.Responses.TokenErrorResponse { Error = "invalid_grant" }));
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("credentials", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_HttpTimeout_ReturnsFailure()
+    {
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TaskCanceledException("timeout", new TimeoutException()));
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("timed out", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_InvalidBase64CredentialsWithoutDi_ReturnsFailure()
+    {
+        var verifier = new AndroidSubscriptionVerifier(new AndroidSubscriptionOptions
+        {
+            PackageName = "com.example.app",
+            CredentialsBase64 = "not base64!!"
+        });
+
+        var result = await verifier.VerifySubscriptionAsync("token-001", "premium_monthly");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("credentials", result.ErrorMessage);
     }
 
     [Fact]

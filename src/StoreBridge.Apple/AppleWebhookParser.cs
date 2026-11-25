@@ -32,6 +32,15 @@ public sealed class AppleWebhookParser : IWebhookParser
                 outerPayload.Data.SignedTransactionInfo);
         }
 
+        DecodedRenewalInfo? renewalInfo = null;
+        if (!string.IsNullOrEmpty(outerPayload.Data?.SignedRenewalInfo))
+        {
+            renewalInfo = AppleJwtHelper.DecodePayload<DecodedRenewalInfo>(
+                outerPayload.Data.SignedRenewalInfo);
+        }
+
+        var environment = outerPayload.Data?.Environment ?? outerPayload.Summary?.Environment;
+
         var notification = new SubscriptionNotification
         {
             Store = Store,
@@ -40,19 +49,20 @@ public sealed class AppleWebhookParser : IWebhookParser
             NotificationId = outerPayload.NotificationUUID ?? string.Empty,
             SubscriptionId = transactionInfo?.OriginalTransactionId ?? string.Empty,
             ProductId = transactionInfo?.ProductId ?? string.Empty,
-            Status = AppleStatusMapper.Map(outerPayload.Data?.Status),
+            Status = AppleStatusMapper.Map(outerPayload.Data?.Status, autoRenewOff: renewalInfo?.AutoRenewStatus == 0),
             ExpiresAt = transactionInfo?.ExpiresDate.HasValue == true
                 ? DateTimeOffset.FromUnixTimeMilliseconds(transactionInfo.ExpiresDate!.Value)
                 : null,
             EventAt = outerPayload.SignedDate.HasValue
                 ? DateTimeOffset.FromUnixTimeMilliseconds(outerPayload.SignedDate.Value)
                 : null,
-            IsSandbox = string.Equals(outerPayload.Data?.Environment, "Sandbox", StringComparison.OrdinalIgnoreCase)
+            IsSandbox = AppleJwtHelper.IsNonProduction(environment)
         };
 
         return Task.FromResult(notification);
     }
 
+    // https://developer.apple.com/documentation/appstoreservernotifications/notificationtype
     private static NotificationEventType MapEventType(string? type, string? subtype) => type switch
     {
         "DID_RENEW" => NotificationEventType.Renewed,
@@ -61,11 +71,14 @@ public sealed class AppleWebhookParser : IWebhookParser
         "DID_CHANGE_RENEWAL_STATUS" => NotificationEventType.AutoRenewEnabled,
         "EXPIRED" => NotificationEventType.Expired,
         "DID_FAIL_TO_RENEW" when subtype == "GRACE_PERIOD" => NotificationEventType.GracePeriod,
-        "DID_FAIL_TO_RENEW" => NotificationEventType.Expired,
-        // Grace period ended — subscription entered account hold
+        // No subtype: billing failed and the subscription entered billing retry without a grace period
+        "DID_FAIL_TO_RENEW" => NotificationEventType.InBillingRetry,
+        // Grace period ended — Apple keeps retrying billing (up to 60 days)
         "GRACE_PERIOD_EXPIRED" => NotificationEventType.InBillingRetry,
         "REFUND" => NotificationEventType.Refunded,
         "REVOKE" => NotificationEventType.Refunded,
+        // A refund was reversed after a dispute — reinstate access
+        "REFUND_REVERSED" => NotificationEventType.RefundReversed,
         "OFFER_REDEEMED" => NotificationEventType.Renewed,
         "CONSUMPTION_REQUEST" => NotificationEventType.Other,
         "TEST" => NotificationEventType.Test,

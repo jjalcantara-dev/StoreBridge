@@ -36,21 +36,29 @@ public sealed class AndroidWebhookAuthenticator : IWebhookAuthenticator
             throw new ArgumentException(
                 $"{nameof(AndroidWebhookAuthenticatorOptions.WebhookUrl)} must be set.", nameof(options));
 
-        _tokenValidator = tokenValidator;
+        if (string.IsNullOrWhiteSpace(options.ExpectedServiceAccountEmail))
+            throw new ArgumentException(
+                $"{nameof(AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail)} must be set: without it any " +
+                "Google-signed ID token minted for your URL would be accepted.", nameof(options));
+
+        _tokenValidator = tokenValidator ?? throw new ArgumentNullException(nameof(tokenValidator));
     }
 
     /// <summary>
     /// Validates the OIDC Bearer token from the Google Pub/Sub push request.
     /// </summary>
-    /// <param name="rawBody">The raw webhook body (not used for Google auth — provided for interface compatibility).</param>
+    /// <param name="rawBody">
+    /// The raw webhook body. Only inspected when <see cref="AndroidWebhookAuthenticatorOptions.ExpectedPackageName"/>
+    /// is set, to check the notification's <c>packageName</c>.
+    /// </param>
     /// <param name="bearerToken">
     /// The value of the <c>Authorization</c> HTTP header.
     /// Accepted formats: <c>"Bearer eyJ..."</c> or the raw JWT string.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="WebhookAuthenticationException">
-    /// Thrown when the token is missing, expired, has an invalid signature,
-    /// wrong audience, or mismatched service account email.
+    /// Thrown when the token is missing, expired, has an invalid signature, wrong audience, an unverified or
+    /// mismatched service account email, or when the package name does not match.
     /// </exception>
     public async Task ValidateAsync(
         string rawBody,
@@ -77,12 +85,20 @@ public sealed class AndroidWebhookAuthenticator : IWebhookAuthenticator
                 $"Google Pub/Sub OIDC token validation failed: {ex.Message}", ex);
         }
 
-        if (_options.ExpectedServiceAccountEmail is not null &&
+        if (!payload.EmailVerified ||
             !string.Equals(payload.Email, _options.ExpectedServiceAccountEmail, StringComparison.OrdinalIgnoreCase))
         {
             throw new WebhookAuthenticationException(
                 $"Pub/Sub service account email mismatch. " +
-                $"Expected '{_options.ExpectedServiceAccountEmail}', got '{payload.Email}'.");
+                $"Expected verified '{_options.ExpectedServiceAccountEmail}', got '{payload.Email}' (email_verified={payload.EmailVerified}).");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_options.ExpectedPackageName))
+        {
+            var (notification, _) = AndroidPubSubReader.Parse(rawBody);
+            if (!string.Equals(notification.PackageName, _options.ExpectedPackageName, StringComparison.Ordinal))
+                throw new WebhookAuthenticationException(
+                    $"Notification is for package '{notification.PackageName}', expected '{_options.ExpectedPackageName}'.");
         }
     }
 }

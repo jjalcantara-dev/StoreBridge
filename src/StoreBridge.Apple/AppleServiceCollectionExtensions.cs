@@ -70,15 +70,44 @@ public static class AppleServiceCollectionExtensions
     /// the parser — call <see cref="IWebhookAuthenticator.ValidateAsync"/> before
     /// <see cref="IWebhookParser.ParseAsync"/>.
     /// </summary>
-    public static IServiceCollection AddAppleWebhooks(this IServiceCollection services)
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">
+    /// Configures the app identity notifications must belong to; <see cref="AppleWebhookAuthenticatorOptions.BundleId"/> is required.
+    /// </param>
+    public static IServiceCollection AddAppleWebhooks(
+        this IServiceCollection services,
+        Action<AppleWebhookAuthenticatorOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.Configure(configure);
+        return AddWebhooksCore(services);
+    }
+
+    /// <summary>Binds <see cref="AppleWebhookAuthenticatorOptions"/> from an <see cref="IConfiguration"/> section.</summary>
+    public static IServiceCollection AddAppleWebhooks(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.Configure<AppleWebhookAuthenticatorOptions>(configuration);
+        return AddWebhooksCore(services);
+    }
+
+    private static IServiceCollection AddWebhooksCore(IServiceCollection services)
+    {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IValidateOptions<AppleWebhookAuthenticatorOptions>, AppleWebhookAuthenticatorOptionsValidator>());
         services.AddSingleton<AppleWebhookParser>();
         services.AddSingleton<IWebhookParser>(sp => sp.GetRequiredService<AppleWebhookParser>());
         services.AddSingleton<AppleInAppPurchaseWebhookParser>();
         services.AddSingleton<IInAppPurchaseWebhookParser>(sp => sp.GetRequiredService<AppleInAppPurchaseWebhookParser>());
-        // Explicit factory: the parameterless ctor anchors to the built-in Apple Root CA - G3.
-        services.AddSingleton(_ => new AppleWebhookAuthenticator());
+        // Anchors to the built-in Apple Root CA - G3.
+        services.AddSingleton(sp => new AppleWebhookAuthenticator(
+            sp.GetRequiredService<IOptions<AppleWebhookAuthenticatorOptions>>()));
         services.AddSingleton<IWebhookAuthenticator>(sp => sp.GetRequiredService<AppleWebhookAuthenticator>());
         return services;
     }

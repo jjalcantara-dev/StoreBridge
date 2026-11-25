@@ -43,6 +43,9 @@ internal sealed class DeveloperNotification
     [JsonPropertyName("voidedPurchaseNotification")]
     public VoidedPurchaseNotificationPayload? VoidedPurchaseNotification { get; set; }
 
+    [JsonPropertyName("pendingRefundReviewNotification")]
+    public PendingRefundReviewNotificationPayload? PendingRefundReviewNotification { get; set; }
+
     [JsonPropertyName("testNotification")]
     public TestNotificationPayload? TestNotification { get; set; }
 }
@@ -58,6 +61,10 @@ internal sealed class SubscriptionNotificationPayload
     [JsonPropertyName("purchaseToken")]
     public string? PurchaseToken { get; set; }
 
+    /// <summary>
+    /// Legacy field: no longer listed in Google's RTDN reference and may be absent. Query
+    /// <c>purchases.subscriptionsv2.get</c> for the authoritative product ID.
+    /// </summary>
     [JsonPropertyName("subscriptionId")]
     public string? SubscriptionId { get; set; }
 }
@@ -89,9 +96,32 @@ internal sealed class VoidedPurchaseNotificationPayload
     [JsonPropertyName("refundType")]
     public int RefundType { get; set; }
 
-    /// <summary>1 = one-time product, 2 = subscription.</summary>
+    /// <summary>1 = PRODUCT_TYPE_SUBSCRIPTION, 2 = PRODUCT_TYPE_ONE_TIME.</summary>
     [JsonPropertyName("productType")]
     public int ProductType { get; set; }
+}
+
+internal static class VoidedProductType
+{
+    internal const int Subscription = 1;
+    internal const int OneTime = 2;
+}
+
+/// <summary>A chargeback that needs developer review via <c>orders.reviewRefund</c> within 24 hours.</summary>
+internal sealed class PendingRefundReviewNotificationPayload
+{
+    [JsonPropertyName("version")]
+    public string? Version { get; set; }
+
+    [JsonPropertyName("pendingRefundToken")]
+    public string? PendingRefundToken { get; set; }
+
+    [JsonPropertyName("orderId")]
+    public string? OrderId { get; set; }
+
+    /// <summary>7 = CHARGEBACK (the only value supported today).</summary>
+    [JsonPropertyName("refundReason")]
+    public int RefundReason { get; set; }
 }
 
 internal sealed class TestNotificationPayload

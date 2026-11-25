@@ -32,7 +32,7 @@ StoreBridge.Android.AndroidWebhookAuthenticator.Store.get -> StoreBridge.Store
 StoreBridge.Android.AndroidWebhookAuthenticator.ValidateAsync(string! rawBody, string? bearerToken = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.AndroidWebhookAuthenticatorOptions() -> void
-StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.get -> string?
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.get -> string!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail.set -> void
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.WebhookUrl.get -> string!
 StoreBridge.Android.AndroidWebhookAuthenticatorOptions.WebhookUrl.set -> void
@@ -45,3 +45,5 @@ static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidInAppPur
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidSubscriptions(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Android.AndroidSubscriptionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static StoreBridge.Android.AndroidServiceCollectionExtensions.AddAndroidWebhooks(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<StoreBridge.Android.AndroidWebhookAuthenticatorOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.get -> string?
+StoreBridge.Android.AndroidWebhookAuthenticatorOptions.ExpectedPackageName.set -> void

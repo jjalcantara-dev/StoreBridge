@@ -11,4 +11,10 @@ public sealed class AppleSubscriptionOptions : AppleApiOptions
     /// Sandbox:    https://api.storekit-sandbox.itunes.apple.com/inApps/v1/subscriptions/
     /// </summary>
     public string SubscriptionsBaseUrl { get; set; } = "https://api.storekit.itunes.apple.com/inApps/v1/subscriptions/";
+
+    /// <summary>
+    /// Sandbox endpoint used when <see cref="AppleApiOptions.SandboxFallback"/> is enabled and
+    /// <see cref="SubscriptionsBaseUrl"/> returns 404.
+    /// </summary>
+    public string SandboxSubscriptionsBaseUrl { get; set; } = "https://api.storekit-sandbox.itunes.apple.com/inApps/v1/subscriptions/";
 }

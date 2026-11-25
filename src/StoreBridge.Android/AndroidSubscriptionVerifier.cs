@@ -1,4 +1,5 @@
 using Google.Apis.AndroidPublisher.v3;
+using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.AndroidPublisher.v3.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,7 +34,8 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
         _logger = logger ?? NullLogger<AndroidSubscriptionVerifier>.Instance;
         _client = service != null
             ? new Lazy<IAndroidSubscriptionsv2>(() => new GoogleSubscriptionsv2Adapter(service))
-            : new Lazy<IAndroidSubscriptionsv2>(() => new GoogleSubscriptionsv2Adapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)));
+            : new Lazy<IAndroidSubscriptionsv2>(() => new GoogleSubscriptionsv2Adapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)),
+                LazyThreadSafetyMode.PublicationOnly);
     }
 
     /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
@@ -55,7 +57,7 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
     /// <param name="receiptOrToken">The purchase token from the Google Play Billing client.</param>
     /// <param name="productId">
     /// The subscription product ID (e.g. "premium_monthly"). Required.
-    /// Used to select the matching line item from the V2 response.
+    /// The purchase token must contain a line item for this product; otherwise the result is a failure.
     /// The package name is taken from <see cref="AndroidOptions.PackageName"/>.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -134,9 +136,20 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
             _logger.LogWarning(ex, "Google subscription verification: network error for token {PurchaseToken}", purchaseToken);
             return SubscriptionVerificationResult.Failure(Store, $"Google API network error: {ex.Message}");
         }
-        catch (InvalidOperationException ex)
+        catch (TimeoutException ex)
         {
-            // GoogleCredential.FromStream throws this when the JSON credentials are malformed
+            _logger.LogWarning(ex, "Google subscription verification timed out for token {PurchaseToken}", purchaseToken);
+            return SubscriptionVerificationResult.Failure(Store, ex.Message);
+        }
+        catch (TokenResponseException ex)
+        {
+            // OAuth token exchange failed: key revoked/deleted, clock skew, or service account disabled
+            _logger.LogError(ex, "Google OAuth token request failed — check the service account key in AndroidOptions.CredentialsBase64");
+            return SubscriptionVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // Malformed base64 or a JSON that is not a service-account key (only when constructed without DI validation)
             _logger.LogError(ex, "Google credentials could not be loaded — check AndroidOptions.CredentialsBase64");
             return SubscriptionVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
         }
@@ -145,62 +158,71 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
     private SubscriptionVerificationResult MapToResult(
         SubscriptionPurchaseV2 sub, string subscriptionId, string purchaseToken)
     {
-        // Prefer the line item whose productId matches; fall back to the first one
+        // Only the line item for the requested product counts. Never fall back to another product: a client
+        // could otherwise present the token of a cheap subscription while asking to unlock an expensive one.
         var lineItem = sub.LineItems?.FirstOrDefault(li =>
-            string.Equals(li.ProductId, subscriptionId, StringComparison.OrdinalIgnoreCase))
-            ?? sub.LineItems?.FirstOrDefault();
+            string.Equals(li.ProductId, subscriptionId, StringComparison.Ordinal));
 
-        var expiresAt = lineItem != null && !string.IsNullOrEmpty(lineItem.ExpiryTimeRaw)
+        if (lineItem == null)
+        {
+            var found = string.Join(", ", sub.LineItems?.Select(li => li.ProductId) ?? []);
+            return SubscriptionVerificationResult.Failure(Store,
+                $"Purchase token does not contain subscription '{subscriptionId}' (found: {(found.Length == 0 ? "none" : found)}).");
+        }
+
+        var expiresAt = !string.IsNullOrEmpty(lineItem.ExpiryTimeRaw)
             ? lineItem.ExpiryTimeDateTimeOffset
             : (DateTimeOffset?)null;
         var purchasedAt = !string.IsNullOrEmpty(sub.StartTimeRaw)
             ? sub.StartTimeDateTimeOffset
             : (DateTimeOffset?)null;
-        var state = sub.SubscriptionState;
 
-        var status = MapState(state, expiresAt);
-        var cancelledByUser =
-            sub.CanceledStateContext?.UserInitiatedCancellation != null
-            || state == "SUBSCRIPTION_STATE_CANCELED";
+        // recurringPrice: the plan's list price — excludes taxes and introductory/offer discounts.
+        var price = lineItem.AutoRenewingPlan?.RecurringPrice;
+        var priceMicros = price is null ? 0 : ToMicros(price.Units, price.Nanos);
 
         return new SubscriptionVerificationResult
         {
             IsVerified = true,
             Store = Store,
-            Status = status,
+            Status = MapState(sub.SubscriptionState, expiresAt),
             SubscriptionId = purchaseToken,
-            ProductId = lineItem?.ProductId ?? subscriptionId,
+            ProductId = lineItem.ProductId ?? subscriptionId,
             ExpiresAt = expiresAt,
             PurchasedAt = purchasedAt,
-            IsPromotional = !string.IsNullOrEmpty(lineItem?.OfferDetails?.OfferId),
-            // V2 does not include price in the purchase response; use the catalog API if needed
-            PriceAmount = 0,
-            CurrencyCode = string.Empty,
-            PriceDecimal = 0,
-            CancelledByUser = cancelledByUser,
+            IsPromotional = !string.IsNullOrEmpty(lineItem.OfferDetails?.OfferId),
+            PriceAmount = priceMicros,
+            CurrencyCode = price?.CurrencyCode ?? string.Empty,
+            PriceDecimal = PriceConverter.FromGoogleMicros(priceMicros),
+            CancelledByUser = sub.CanceledStateContext?.UserInitiatedCancellation != null,
             IsSandbox = sub.TestPurchase != null
         };
     }
 
+    private static long ToMicros(long? units, int? nanos) =>
+        (units ?? 0) * 1_000_000 + (nanos ?? 0) / 1_000;
+
     private static SubscriptionStatus MapState(string? state, DateTimeOffset? expiresAt)
     {
-        // Treat an already-passed expiry as Expired regardless of reported state
-        if (expiresAt.HasValue && expiresAt.Value < DateTimeOffset.UtcNow)
-            return SubscriptionStatus.Expired;
+        var expired = expiresAt.HasValue && expiresAt.Value < DateTimeOffset.UtcNow;
 
+        // The reported state wins for ON_HOLD / IN_GRACE_PERIOD / PAUSED: in those states the line item's
+        // expiryTime is legitimately in the past (hold/pause) or extended (grace), so it must not be used to
+        // override them. Expiry only downgrades states that claim the user is still entitled.
         return state switch
         {
-            "SUBSCRIPTION_STATE_ACTIVE" => SubscriptionStatus.Active,
-            // CANCELED = user cancelled but still within the paid period
-            "SUBSCRIPTION_STATE_CANCELED" => SubscriptionStatus.Active,
+            "SUBSCRIPTION_STATE_ACTIVE" => expired ? SubscriptionStatus.Expired : SubscriptionStatus.Active,
+            // CANCELED = auto-renew off but still within the paid period
+            "SUBSCRIPTION_STATE_CANCELED" => expired ? SubscriptionStatus.Expired : SubscriptionStatus.Cancelled,
             "SUBSCRIPTION_STATE_IN_GRACE_PERIOD" => SubscriptionStatus.InGracePeriod,
             "SUBSCRIPTION_STATE_ON_HOLD" => SubscriptionStatus.InBillingRetry,
-            // PAUSED has no direct equivalent; surface as Unknown
+            // PAUSED has no normalized equivalent (no access, not expired)
             "SUBSCRIPTION_STATE_PAUSED" => SubscriptionStatus.Unknown,
             "SUBSCRIPTION_STATE_EXPIRED" => SubscriptionStatus.Expired,
-            // PENDING = initial purchase not yet confirmed by the store
+            // PENDING = initial purchase not yet paid; PENDING_PURCHASE_CANCELED = that pending purchase was dropped
             "SUBSCRIPTION_STATE_PENDING" => SubscriptionStatus.Unknown,
-            _ => SubscriptionStatus.Unknown
+            "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED" => SubscriptionStatus.Unknown,
+            _ => expired ? SubscriptionStatus.Expired : SubscriptionStatus.Unknown
         };
     }
 }

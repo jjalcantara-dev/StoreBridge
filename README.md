@@ -1,8 +1,8 @@
 # StoreBridge
 
-**One .NET library for verifying and handling Apple App Store and Google Play subscriptions and in-app purchases.** StoreBridge normalizes the two stores' very different APIs and webhook formats behind one set of interfaces, so you can write your billing logic once and run it against both. Targets `net8.0`, `net9.0`, and `net10.0`. Drops cleanly into ASP.NET Core APIs, Azure / AWS Functions, background workers, or plain console apps.
+**One .NET library for verifying and handling Apple App Store and Google Play subscriptions and in-app purchases.** StoreBridge normalizes the two stores' very different APIs and webhook formats behind one set of interfaces, so you can write your billing logic once and run it against both. Targets `net10.0` (the current LTS; .NET 8 and 9 reached end of support on 10 November 2026). Drops cleanly into ASP.NET Core APIs, Azure / AWS Functions, background workers, or plain console apps.
 
-> **Status:** all 197 unit tests pass on every target framework. The library does the cryptographic heavy lifting (Apple x5c chain validation against Apple Root CA - G3, Google OIDC token validation for Pub/Sub) so you don't have to roll your own.
+> **Status:** all unit tests pass. The library does the cryptographic heavy lifting (Apple x5c chain validation against Apple Root CA - G3 with Apple's marker-OID checks plus bundle/environment binding, Google OIDC token validation for Pub/Sub) so you don't have to roll your own.
 
 ---
 
@@ -33,14 +33,14 @@
 |---|---|---|
 | Verify Apple subscription / one-time IAP via App Store Server API v1 | ✅ | Generate ES256 JWT, sign with `.p8` key, call API, parse nested signed JWTs |
 | Verify Google Play subscription / one-time IAP via Android Publisher v3 | ✅ | Wire up service account, build OAuth client, call subscriptionsv2 / products endpoints |
-| Cryptographically authenticate Apple Server Notifications v2 | ✅ | Walk x5c chain, anchor to Apple Root CA - G3, verify ES256 over JWT and nested JWTs |
+| Cryptographically authenticate Apple Server Notifications v2 | ✅ | Walk x5c chain, anchor to Apple Root CA - G3, check Apple's marker OIDs, verify ES256 over JWT and nested JWTs, bind to your bundle ID |
 | Cryptographically authenticate Google Pub/Sub push webhooks | ✅ | Validate OIDC bearer token (signature, audience, issuer, expiry, service-account email) |
 | Normalized status / event enums across both stores | ✅ | Maintain two separate switch statements forever |
 | Retry on transient failures with sensible defaults | ✅ (1/2/3/5/8s, both stores) | Roll your own Polly policies |
 | **Fail-fast on misconfiguration** | ✅ `IValidateOptions<T>` validates `.p8` import and service-account JSON at startup | Surfaces as cryptic errors during the first real webhook |
 | **Robust runtime exception handling** | ✅ HTTP, JSON, credential, cancellation paths all covered | Easy to leak a `JsonException` or `CryptographicException` out to the response |
 | Deduplicate webhook retries | ✅ via `NotificationId` | Track Apple `notificationUUID` + Google `messageId` yourself |
-| Sandbox vs production | ✅ swap one URL | Track two endpoints per platform |
+| Sandbox vs production | ✅ production by default, automatic sandbox fallback on 404 (App Review / TestFlight) | Track two endpoints per platform |
 
 If you only need one store today, install only that package — there is no transitive dependency on the other.
 
@@ -91,7 +91,11 @@ builder.Services.AddAppleSubscriptions(opts =>
     opts.PrivateKeyBase64 = "<base64 of the .p8 key bytes>";
 });
 builder.Services.AddAppleInAppPurchases(opts => { /* same fields */ });
-builder.Services.AddAppleWebhooks();
+builder.Services.AddAppleWebhooks(opts =>
+{
+    opts.BundleId   = "com.example.app"; // required — Apple-signed notifications for other apps are rejected
+    opts.AppAppleId = 1234567890;        // optional — checked on production notifications
+});
 
 // Google — verifiers + webhook parser + authenticator
 builder.Services.AddAndroidSubscriptions(builder.Configuration.GetSection("GooglePlay"));
@@ -189,16 +193,26 @@ builder.Services.AddAppleSubscriptions(opts =>
     // Optional: point at the sandbox endpoint while you test
     // opts.SubscriptionsBaseUrl = "https://api.storekit-sandbox.itunes.apple.com/inApps/v1/subscriptions/";
 
-    // Optional: retry budget for 5xx / network failures (default 3)
+    // Optional: attempts for 5xx / 429 / network failures / timeouts (default 3)
     // opts.MaxRetries = 3;
+
+    // Optional: disable the production → sandbox retry on 404 (default true)
+    // opts.SandboxFallback = false;
 });
 builder.Services.AddAppleInAppPurchases(opts => { /* same four fields */ });
-builder.Services.AddAppleWebhooks();
+builder.Services.AddAppleWebhooks(opts =>
+{
+    opts.BundleId   = configuration["Apple:BundleId"]!;
+    opts.AppAppleId = long.Parse(configuration["Apple:AppAppleId"]!); // App Store Connect → App Information → Apple ID
+});
 ```
 
 ### Sandbox vs Production for Apple
 
-Just swap the base URL — everything else is identical:
+Production is the default. Because **App Review and TestFlight purchases are sandbox transactions** even when your
+server talks to production, a production lookup that returns `404` is retried once against the sandbox endpoint
+(`SandboxSubscriptionsBaseUrl` / `SandboxTransactionsBaseUrl`) — this is Apple's recommended pattern. Turn it off
+with `SandboxFallback = false`. To talk only to the sandbox, swap the base URL — everything else is identical:
 
 ```csharp
 // Sandbox
@@ -271,7 +285,7 @@ It's on every page of your app in Play Console — e.g. `com.example.app`. Goes 
 2. **Subscriptions → Create subscription**:
    - **Delivery type:** Push.
    - **Endpoint URL:** your public webhook URL (e.g. `https://api.example.com/webhooks/google`). It must be HTTPS.
-   - **Enable authentication:** **YES**. Pick the same service account you created above (or any service account — that email becomes the OIDC token's `email` claim, which StoreBridge can verify against `ExpectedServiceAccountEmail`).
+   - **Enable authentication:** **YES**. Pick the same service account you created above (or any service account — that email becomes the OIDC token's `email` claim, which StoreBridge **requires** to match `ExpectedServiceAccountEmail`).
 3. In Cloud Console: **Pub/Sub → Topics → your topic → Permissions**, grant `Pub/Sub Publisher` to `google-play-developer-notifications@system.gserviceaccount.com` (Google's publisher).
 4. In Play Console → your app → **Monetize → Monetization setup → Real-time developer notifications**, paste the **full topic name** (`projects/<project-id>/topics/play-rtdn`) and click **Send test notification** to verify wiring — StoreBridge surfaces it as `NotificationEventType.Test`.
 
@@ -287,13 +301,14 @@ builder.Services.AddAndroidInAppPurchases(opts => { /* same two fields */ });
 builder.Services.AddAndroidWebhooks(opts =>
 {
     opts.WebhookUrl                  = "https://api.example.com/webhooks/google";
-    opts.ExpectedServiceAccountEmail = "play-verifier@my-project.iam.gserviceaccount.com";
+    opts.ExpectedServiceAccountEmail = "play-verifier@my-project.iam.gserviceaccount.com"; // required
+    opts.ExpectedPackageName         = "com.example.app"; // optional — rejects notifications for other apps
 });
 ```
 
 > **Sandbox for Google:** there is no separate endpoint. Make purchases as a [licensed tester](https://support.google.com/googleplay/android-developer/answer/9845334); their transactions come back with `IsSandbox = true` (the Play API marks them as `testPurchase`).
 
-> **Heads-up: subscription prices.** Google's `purchases.subscriptionsv2.get` endpoint does **not** return the price in the purchase response. `SubscriptionVerificationResult.PriceAmount` / `PriceDecimal` / `CurrencyCode` are returned empty for Android subscriptions — query the Play catalog API separately if you need the price. One-time purchase prices are also not returned by the products endpoint and follow the same rule.
+> **Heads-up: prices.** For auto-renewing Android subscriptions, `PriceAmount` / `PriceDecimal` / `CurrencyCode` come from the line item's `autoRenewingPlan.recurringPrice` — the plan's list price, **excluding taxes and introductory/offer discounts**. Prepaid plans carry no recurring price and come back empty. Google's one-time products endpoint returns no price either; query the Play catalog API if you need it.
 
 ---
 
@@ -305,10 +320,12 @@ builder.Services.AddAndroidWebhooks(opts =>
 
 **Apple — `AppleWebhookAuthenticator`:**
 - Reads the `x5c` certificate chain from the signed JWT header.
-- Builds the X.509 chain with the leaf as the entity, intermediates as extras, and **anchors to Apple Root CA - G3** (PEM bundled into the assembly).
-- Verifies the leaf certificate's validity window.
+- Requires `alg = ES256` and exactly three certificates (leaf, intermediate, root), like Apple's own App Store Server Libraries.
+- Requires Apple's marker extensions: `1.2.840.113635.100.6.11.1` on the leaf and `1.2.840.113635.100.6.2.1` on the intermediate. Apple Root CA - G3 also anchors other Apple PKI hierarchies; without these checks any EC certificate issued under it would be accepted.
+- Builds the X.509 chain leaf → x5c intermediate → **Apple Root CA - G3** (bundled into the assembly), checking every certificate's validity window. Certificate downloads (AIA) are disabled, so attacker-supplied certificates can't make your server fetch URLs.
 - Verifies the ES256 signature of the outer JWT against the leaf's public key.
-- **Recursively verifies the nested `signedTransactionInfo` and `signedRenewalInfo` JWTs the same way.**
+- **Verifies the nested `signedTransactionInfo` and `signedRenewalInfo` JWTs the same way.**
+- **Binds the notification to your app:** the `bundleId` (from `data`, `summary` or `externalPurchaseToken`, and in the nested transaction) must equal `BundleId`; production notifications must carry `AppAppleId` when you set it; non-production environments are rejected when `AllowSandbox = false`. A genuine Apple signature alone only proves *Apple* signed it — not that it is for *your* app.
 - Bearer token parameter is ignored (Apple's signature is self-contained inside the JWT).
 
 The bundled Apple Root CA - G3 has these fingerprints — verify against Apple's [Certificate Authority](https://www.apple.com/certificateauthority/) page before deploying to production:
@@ -323,7 +340,8 @@ If Apple rotates roots, pass one or more DER-encoded roots yourself. Download ea
 var oldRootDer = File.ReadAllBytes("AppleRootCA-G3.cer");
 var newRootDer = File.ReadAllBytes("AppleRootCA-G4.cer"); // hypothetical successor
 var authenticator = new AppleWebhookAuthenticator(
-    new[] { oldRootDer, newRootDer });
+    new AppleWebhookAuthenticatorOptions { BundleId = "com.example.app" },
+    [oldRootDer, newRootDer]);
 ```
 
 Passing any root via the constructor replaces the bundled one — supply every root you want to trust.
@@ -331,7 +349,8 @@ Passing any root via the constructor replaces the bundled one — supply every r
 **Google — `AndroidWebhookAuthenticator`:**
 - Reads the OIDC bearer token from the `Authorization` header (Pub/Sub attaches one to every push).
 - Calls `GoogleJsonWebSignature.ValidateAsync` (signature, issuer = `accounts.google.com`, audience = your webhook URL, expiry).
-- Optionally verifies the `email` claim equals `ExpectedServiceAccountEmail`.
+- **Requires** the `email` claim to equal `ExpectedServiceAccountEmail` and `email_verified = true`. This is mandatory: anyone with a Google Cloud account can mint a Google-signed ID token for an arbitrary audience, so the audience check alone does not prove the request came from *your* Pub/Sub subscription.
+- Optionally checks the notification's `packageName` against `ExpectedPackageName`.
 
 ### Wiring it up
 
@@ -392,9 +411,9 @@ app.MapPost("/webhooks/google", async (
 ```csharp
 var result = await verifier.VerifySubscriptionAsync(
     originalTransactionId,
-    productId: "premium_monthly");   // optional — disambiguates when a customer has multiple
+    productId: "premium_monthly");   // optional — when given, the transaction MUST be for this product
 
-if (result.IsVerified && result.Status == SubscriptionStatus.Active)
+if (result.IsVerified && result.Status.GrantsAccess())   // Active, Cancelled (still paid) or InGracePeriod
 {
     Console.WriteLine($"Expires:           {result.ExpiresAt}");
     Console.WriteLine($"Price:             {result.PriceDecimal} {result.CurrencyCode}");
@@ -431,7 +450,7 @@ var result = await verifier.VerifyAsync(
     "com.example.app", "premium_monthly", purchaseToken);
 ```
 
-Google's `purchases.subscriptionsv2.get` returns *all* line items for the order; StoreBridge picks the one whose `productId` matches what you passed, falling back to the first if none match. If Google returns `410 Gone` (subscription expired ≥60 days ago and was purged), StoreBridge returns `IsVerified = true` with `Status = Expired` — that's the correct outcome, not an error.
+Google's `purchases.subscriptionsv2.get` returns *all* line items for the order; StoreBridge uses the one whose `productId` matches what you passed. If none matches, the result is a **failure** — it never falls back to another product, so a token for a cheap subscription can't unlock an expensive one (the Apple verifier behaves the same way when you pass `productId`). If Google returns `410 Gone` (subscription expired ≥60 days ago and was purged), StoreBridge returns `IsVerified = true` with `Status = Expired` — that's the correct outcome, not an error.
 
 ### Google — one-time IAP
 
@@ -449,13 +468,13 @@ if (result.IsVerified)
 
 ### Retries
 
-Apple verifiers retry on transient HTTP errors (5xx and `HttpRequestException` with no status code) using fibonacci-spaced delays (1, 2, 3, 5, 8 seconds). 4xx responses propagate immediately — they aren't transient. Default `MaxRetries = 3`; tune via options. The signing JWT is generated once per call and reused across retries.
+Both stores' verifiers retry on transient errors (5xx, 429 Too Many Requests, network failures and HTTP timeouts) using fibonacci-spaced delays (1, 2, 3, 5, 8 seconds). Other 4xx responses are not retried — they aren't transient. Default `MaxRetries = 3`; tune via options. The signing JWT is generated once per call and reused across retries.
 
 ---
 
 ## Handling webhooks
 
-Both stores deliver lifecycle events server-to-server. After authenticating and parsing, you typically switch on the normalized `EventType` and update your local entitlement record:
+Both stores deliver lifecycle events server-to-server. After authenticating and parsing, you typically switch on the normalized `EventType` and update your local entitlement record. Notifications are *signals*: for anything that grants or removes access, re-read the authoritative state with the verifier (Google explicitly requires this — recent RTDNs no longer even carry the subscription's product ID).
 
 ```csharp
 switch (notification.EventType)
@@ -477,11 +496,15 @@ switch (notification.EventType)
         break;
 
     case NotificationEventType.InBillingRetry:
-        // Grace period ended — account on hold. Suspend access.
+        // Billing failed with no (or after the) grace period — store keeps retrying. Suspend access.
         break;
 
     case NotificationEventType.Refunded:
         // Revoked by the store — remove access immediately.
+        break;
+
+    case NotificationEventType.RefundReversed:
+        // Apple reversed a refund after a dispute — reinstate access.
         break;
 
     case NotificationEventType.Expired:
@@ -503,16 +526,22 @@ For one-time purchase webhooks, use `IInAppPurchaseWebhookParser` and switch on 
 ```csharp
 switch (purchaseNotification.EventType)
 {
-    case InAppPurchaseEventType.Purchased:      // one-time purchase completed
+    case InAppPurchaseEventType.Purchased:      // Apple ONE_TIME_CHARGE, Google ONE_TIME_PRODUCT_PURCHASED
     case InAppPurchaseEventType.Refunded:       // Apple REFUND/REVOKE, Google voidedPurchaseNotification
+    case InAppPurchaseEventType.RefundReversed: // Apple REFUND_REVERSED — reinstate the content
     case InAppPurchaseEventType.Cancelled:      // Google one-time product cancelled
     case InAppPurchaseEventType.ConsumptionRequest:  // Apple consumption request for a consumable
+    case InAppPurchaseEventType.RefundReviewRequested: // Google chargeback review — answer within 24 h
     case InAppPurchaseEventType.Test:           // wiring smoke test
     case InAppPurchaseEventType.Other:          // see purchaseNotification.RawEventType
 }
 ```
 
-> **About `voidedPurchaseNotification`:** Google's voided-purchase payload doesn't carry the SKU, only an `orderId`. StoreBridge surfaces that `orderId` in `ProductId` for refunded notifications so you have *something* to correlate against — look up the SKU from your own records or via the Voided Purchases API if you need it.
+> **About `voidedPurchaseNotification`:** Google's voided-purchase payload doesn't carry the SKU, only an `orderId`, which StoreBridge surfaces in `OrderId` (`ProductId` stays empty). Correlate via `PurchaseId` (the purchase token) or `OrderId`. Voided **subscriptions** (`productType = 1`) are also understood by `AndroidWebhookParser` (as `Refunded` / `Revoked`).
+
+> **About `pendingRefundReviewNotification`:** Google now asks developers to review some chargebacks. StoreBridge maps it to `RefundReviewRequested` with `OrderId` and `RefundReviewToken`; send your suggestion to the Play Developer API `orders.reviewRefund` (not wrapped by StoreBridge) within 24 hours.
+
+> **Unrecognized notifications:** both stores keep adding notification types. Unknown Apple types map to `Other`; a Google payload neither parser understands throws `FormatException` — acknowledge it with a `2xx` anyway, or Pub/Sub will redeliver it indefinitely.
 
 ---
 
@@ -527,12 +556,12 @@ result.SubscriptionId       // originalTransactionId (Apple) / purchaseToken (Go
 result.ProductId            // product / subscription identifier
 result.ExpiresAt            // DateTimeOffset?
 result.PurchasedAt          // DateTimeOffset?
-result.CancelledByUser      // bool — auto-renew disabled (still active until ExpiresAt)
+result.CancelledByUser      // bool — Apple: auto-renew off; Google: user-initiated cancellation
 result.IsPromotional        // bool — trial, intro, or offer
 result.IsSandbox            // bool — sandbox / test purchase
-result.PriceAmount          // long — thousandths (Apple) / micros (Google); 0 for Android sub
-result.PriceDecimal         // decimal — human-readable; 0 for Android sub
-result.CurrencyCode         // ISO 4217 (e.g. "USD"); empty for Android sub
+result.PriceAmount          // long — thousandths (Apple) / micros (Google; recurring list price)
+result.PriceDecimal         // decimal — human-readable
+result.CurrencyCode         // ISO 4217 (e.g. "USD")
 result.AutoRenewProductId   // Apple only — SKU of the next renewal cycle (may differ on plan change)
 result.GracePeriodExpiresAt // Apple only
 result.ErrorMessage         // string? — set when IsVerified = false
@@ -571,8 +600,10 @@ notification.NotificationId
 notification.Store
 notification.PurchaseId
 notification.ProductId
+notification.OrderId          // Google voided / refund-review notifications
+notification.RefundReviewToken // Google refund-review notifications
 notification.EventAt
-notification.IsSandbox
+notification.IsSandbox        // always false for Google RTDNs (no test flag) — use the verifier
 ```
 
 ### `SubscriptionStatus`
@@ -581,11 +612,13 @@ notification.IsSandbox
 |---|---|
 | `Active` | Subscription is active and paid |
 | `Expired` | Billing period ended, no access |
-| `Cancelled` | Cancelled but still within the billing period |
-| `InGracePeriod` | Payment failed, store retrying, limited access |
-| `InBillingRetry` | Grace period ended, account on hold |
+| `Cancelled` | Auto-renew off but still within the paid period — keep access until `ExpiresAt` |
+| `InGracePeriod` | Payment failed, store retrying, access kept |
+| `InBillingRetry` | Payment failed, no (or after the) grace period, store retrying — no access |
 | `Revoked` | Subscription revoked by the store |
-| `Unknown` | Unrecognized state from the store |
+| `Unknown` | Unrecognized state from the store (also Google `PAUSED` / `PENDING`) |
+
+Use `status.GrantsAccess()` to decide entitlement: it is `true` for `Active`, `Cancelled` and `InGracePeriod`. Both stores and both paths (verifier and webhook) use the same meaning — e.g. an Apple subscription with auto-renew off and a Google `SUBSCRIPTION_STATE_CANCELED` are both `Cancelled`.
 
 ### `PurchaseStatus`
 
@@ -604,26 +637,29 @@ notification.IsSandbox
 |---|---|
 | `Renewed` | Both |
 | `AutoRenewDisabled` | Both — user turned off auto-renew |
-| `AutoRenewEnabled` | Both — user re-enabled auto-renew |
+| `AutoRenewEnabled` | Both — user re-enabled auto-renew (Google `SUBSCRIPTION_RESTARTED`) |
 | `Created` | Both |
-| `InBillingRetry` | Both — account on hold after grace period |
+| `InBillingRetry` | Both — billing retry without/after grace period (Apple `DID_FAIL_TO_RENEW` w/o subtype, `GRACE_PERIOD_EXPIRED`; Google `ON_HOLD`) |
 | `GracePeriod` | Both — billing failed, retrying |
 | `Refunded` | Both |
 | `Cancelled` | Both |
 | `Expired` | Both |
 | `Test` | Both — test notification from App Store Connect / Play Console |
 | `Other` | Fallback for unmapped notification types |
+| `RefundReversed` | Apple — `REFUND_REVERSED`; reinstate access |
 
 ### `InAppPurchaseEventType`
 
 | Value | Platforms |
 |---|---|
-| `Purchased` | Both |
+| `Purchased` | Both — Apple `ONE_TIME_CHARGE`, Google `ONE_TIME_PRODUCT_PURCHASED` |
 | `Refunded` | Both — Apple `REFUND`/`REVOKE`, Google `voidedPurchaseNotification` |
 | `Cancelled` | Google — one-time product cancelled |
 | `ConsumptionRequest` | Apple — consumption request for a consumable |
 | `Test` | Both — test notification |
 | `Other` | Fallback |
+| `RefundReversed` | Apple — `REFUND_REVERSED`; reinstate the content |
+| `RefundReviewRequested` | Google — `pendingRefundReviewNotification`; respond via `orders.reviewRefund` within 24 h |
 
 ### `PriceConverter`
 
@@ -652,10 +688,13 @@ What gets validated at startup:
 | `AppleApiOptions.PrivateKeyBase64` | Required, valid base64, imports as PKCS#8 ECDSA — catches `.p8` files that still have the `-----BEGIN/END-----` headers, are uploaded as a binary blob, or are simply the wrong key |
 | `AppleApiOptions.MaxRetries` | `>= 1` |
 | `AppleSubscriptionOptions.SubscriptionsBaseUrl` / `AppleInAppPurchaseOptions.TransactionsBaseUrl` | Absolute http(s) URI |
+| `SandboxSubscriptionsBaseUrl` / `SandboxTransactionsBaseUrl` | Absolute http(s) URI when `SandboxFallback` is on |
+| `AppleWebhookAuthenticatorOptions.BundleId` | Required, non-blank |
 | `AndroidOptions.PackageName` | Required, non-blank |
-| `AndroidOptions.CredentialsBase64` | Required, valid base64, parses through `GoogleCredential.FromStream` — catches wrong file format, truncated downloads, OAuth-client JSON pasted instead of service-account JSON |
+| `AndroidOptions.CredentialsBase64` | Required, valid base64, parses as a **service-account** key through `CredentialFactory.FromStream<ServiceAccountCredential>` — catches wrong file format, truncated downloads, OAuth-client / `authorized_user` / `external_account` JSON pasted instead of a service-account key |
 | `AndroidOptions.MaxRetries` | `>= 1` (defaulted to 3 if not set) |
 | `AndroidWebhookAuthenticatorOptions.WebhookUrl` | Required, absolute http(s) URI (must match the audience claim of the OIDC token Google sends) |
+| `AndroidWebhookAuthenticatorOptions.ExpectedServiceAccountEmail` | Required, looks like an email |
 
 A failure raises `OptionsValidationException` with a remediation message naming the offending field:
 
@@ -673,11 +712,13 @@ The verifiers never let store-side or network exceptions escape to your handler.
 | Exception | Handling |
 |---|---|
 | `HttpRequestException` (Apple) / `Google.GoogleApiException` (Google) | Retried with fibonacci backoff (1, 2, 3, 5, 8 s) up to `MaxRetries` if transient (5xx, 429, or no status). Then returned as `Failure`. |
+| HTTP timeout (`TaskCanceledException` while *your* token is not cancelled) | Retried like a transient error, then → `Failure` with `"... timed out"` |
+| `TokenResponseException` (Google OAuth token exchange — e.g. deleted/revoked service-account key) | → `Failure` with `"Google credentials error"` |
 | `Google.GoogleApiException` with `HttpStatusCode == 410 Gone` (subscription verifier) | Returned as `IsVerified = true, Status = Expired` — that *is* the correct outcome for a subscription expired 60+ days ago and purged from the Play backend |
 | `JsonException` | Body could not be parsed → `Failure` with `"Apple/Google API returned a malformed response"` |
-| `InvalidOperationException` from JWT/credential setup | → `Failure` with the original remediation message in `ErrorMessage` |
+| `InvalidOperationException` / `FormatException` from JWT/credential setup | → `Failure` with the original remediation message in `ErrorMessage` (credential loading is retried on the next call, not cached as a failure) |
 | Empty `originalTransactionId` / `purchaseToken` / `packageName` / `productId` | → `Failure` without hitting the network |
-| `OperationCanceledException` / `TaskCanceledException` | **Always propagates.** Each verifier calls `cancellationToken.ThrowIfCancellationRequested()` on entry so cancellation works even with fake HTTP handlers in tests |
+| `OperationCanceledException` / `TaskCanceledException` caused by **your** `cancellationToken` | **Always propagates.** Each verifier calls `cancellationToken.ThrowIfCancellationRequested()` on entry so cancellation works even with fake HTTP handlers in tests |
 
 Webhook auth/parse exceptions are intentionally NOT caught by the library — you want to return `401` on `WebhookAuthenticationException` and `400` on `FormatException` from the parsers. Wrap them yourself (see [Wiring it up](#wiring-it-up) above).
 
@@ -686,9 +727,10 @@ Webhook auth/parse exceptions are intentionally NOT caught by the library — yo
 Both `AppleRetryHelper` and `AndroidRetryHelper` use the same backoff schedule (1, 2, 3, 5, 8 seconds). Transient means:
 
 - HTTP 5xx (server error)
-- HTTP 429 (Google only — Apple does not advertise rate limits here)
+- HTTP 429 (Too Many Requests — both stores rate-limit)
 - `HttpRequestException` with no status code (network/DNS failure)
 - `Google.GoogleApiException` with `HttpStatusCode == 0`
+- HTTP timeouts (`HttpClient.Timeout` elapsed)
 
 4xx other than 429 propagates immediately — it's a permanent caller error (bad key, missing scope, wrong package) and retrying would just burn quota.
 
@@ -759,11 +801,11 @@ See [`samples/StoreBridge.Sample.Web/README.md`](samples/StoreBridge.Sample.Web/
 git clone https://github.com/jjalcantara-dev/StoreBridge.git
 cd StoreBridge
 
-# Restore + build all three target frameworks (net8, net9, net10)
+# Restore + build (net10.0)
 dotnet restore
 dotnet build --configuration Release
 
-# Run the full test suite (197 unit tests, all green)
+# Run the full test suite
 dotnet test --configuration Release
 
 # Just one project
@@ -782,8 +824,8 @@ src/
   StoreBridge.Apple/       App Store Server API v1 + Server Notifications v2
   StoreBridge.Android/     Android Publisher v3 + Pub/Sub
 tests/
-  StoreBridge.Apple.Tests/    xUnit + FakeHttpMessageHandler  (104 tests)
-  StoreBridge.Android.Tests/  xUnit + NSubstitute             ( 93 tests)
+  StoreBridge.Apple.Tests/    xUnit v3 + FakeHttpMessageHandler
+  StoreBridge.Android.Tests/  xUnit v3 + NSubstitute
 samples/
   StoreBridge.Sample.Web/  Minimal ASP.NET Core harness
 ```
@@ -801,7 +843,7 @@ git tag v1.2.0
 git push origin v1.2.0
 ```
 
-The workflow extracts the version from the tag (`v1.2.0` → `1.2.0`), so you don't edit `Version` in source.
+The workflow extracts the version from the tag (`v1.2.0` → `1.2.0`) and passes it to both the build (assembly versions) and the pack (package version), so you don't edit `Version` in source.
 
 ---
 
