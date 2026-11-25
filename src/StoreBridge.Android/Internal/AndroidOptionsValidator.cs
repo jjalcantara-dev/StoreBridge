@@ -20,6 +20,9 @@ internal static class AndroidOptionsValidator
         if (options.MaxRetries < 1)
             errors.Add($"{nameof(AndroidOptions.MaxRetries)} must be >= 1 (got {options.MaxRetries}).");
 
+        if (options.RequestTimeout <= TimeSpan.Zero)
+            errors.Add($"{nameof(AndroidOptions.RequestTimeout)} must be greater than zero (got {options.RequestTimeout}).");
+
         if (string.IsNullOrWhiteSpace(options.CredentialsBase64))
         {
             errors.Add($"{nameof(AndroidOptions.CredentialsBase64)} is required.");

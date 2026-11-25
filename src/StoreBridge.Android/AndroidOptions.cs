@@ -21,4 +21,10 @@ public abstract class AndroidOptions
     /// a transient error (5xx, 429, network failure). Default: 3.
     /// </summary>
     public int MaxRetries { get; set; } = 3;
+
+    /// <summary>
+    /// Per-attempt HTTP request timeout for calls to the Google Play Developer API. Default: 30 seconds.
+    /// Applied to the internally created <c>AndroidPublisherService</c>.
+    /// </summary>
+    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

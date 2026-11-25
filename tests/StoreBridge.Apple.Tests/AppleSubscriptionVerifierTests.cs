@@ -532,4 +532,64 @@ public sealed class AppleSubscriptionVerifierTests
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => verifier.VerifySubscriptionAsync("tx-001"));
     }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_CachesBearerJwtAcrossCalls()
+    {
+        var handler = new FakeHttpMessageHandler(
+            (HttpStatusCode.OK, BuildResponse()),
+            (HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+        var firstToken = handler.LastBearerToken;
+
+        await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+        var secondToken = handler.LastBearerToken;
+
+        Assert.NotNull(firstToken);
+        Assert.Equal(firstToken, secondToken);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_AppAccountToken_SurfacesAsExternalAccountId()
+    {
+        var signedTx = Jwt(new
+        {
+            originalTransactionId = "tx-001",
+            transactionId = "tx-001",
+            productId = "premium_monthly",
+            appAccountToken = "11111111-2222-3333-4444-555555555555",
+            environment = "Production"
+        });
+        var response = JsonSerializer.Serialize(new
+        {
+            environment = "Production",
+            data = new[]
+            {
+                new { subscriptionGroupIdentifier = "g1", lastTransactions = new[] { new { originalTransactionId = "tx-001", status = 1, signedTransactionInfo = signedTx } } }
+            }
+        });
+
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, response));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.True(result.IsVerified);
+        Assert.Equal("11111111-2222-3333-4444-555555555555", result.ExternalAccountId);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_VerifyResponseSignatures_RejectsUnsignedFakeJwt()
+    {
+        var options = BuildOptions();
+        options.VerifyResponseSignatures = true;
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleSubscriptionVerifier(options, new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.False(result.IsVerified);
+    }
 }

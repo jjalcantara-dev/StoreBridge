@@ -45,11 +45,18 @@ internal static class AndroidRetryHelper
 
             if (attempt < maxRetries - 1)
                 await Task.Delay(
-                    TimeSpan.FromSeconds(DelaySeconds[Math.Min(attempt, DelaySeconds.Length - 1)]),
+                    AddJitter(TimeSpan.FromSeconds(DelaySeconds[Math.Min(attempt, DelaySeconds.Length - 1)])),
                     cancellationToken);
         }
 
         throw lastEx!;
+    }
+
+    private static TimeSpan AddJitter(TimeSpan baseDelay)
+    {
+        // ±25% jitter to spread concurrent retries without materially changing backoff duration.
+        var factor = 0.75 + Random.Shared.NextDouble() * 0.5;
+        return TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * factor);
     }
 
     // No HTTP status set ⇒ network or pre-flight failure ⇒ worth retrying

@@ -114,7 +114,9 @@ public static class AppleServiceCollectionExtensions
 
     private static IServiceCollection AddSubscriptionVerifierCore(IServiceCollection services)
     {
-        services.AddHttpClient(AppleSubscriptionVerifier.HttpClientName);
+        services.AddHttpClient(AppleSubscriptionVerifier.HttpClientName)
+            .ConfigureHttpClient((sp, client) =>
+                client.Timeout = sp.GetRequiredService<IOptions<AppleSubscriptionOptions>>().Value.RequestTimeout);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AppleSubscriptionOptions>, AppleSubscriptionOptionsValidator>());
         services.TryAddSingleton(sp => new AppleSubscriptionVerifier(
@@ -127,7 +129,9 @@ public static class AppleServiceCollectionExtensions
 
     private static IServiceCollection AddInAppPurchaseVerifierCore(IServiceCollection services)
     {
-        services.AddHttpClient(AppleInAppPurchaseVerifier.HttpClientName);
+        services.AddHttpClient(AppleInAppPurchaseVerifier.HttpClientName)
+            .ConfigureHttpClient((sp, client) =>
+                client.Timeout = sp.GetRequiredService<IOptions<AppleInAppPurchaseOptions>>().Value.RequestTimeout);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AppleInAppPurchaseOptions>, AppleInAppPurchaseOptionsValidator>());
         services.TryAddSingleton(sp => new AppleInAppPurchaseVerifier(

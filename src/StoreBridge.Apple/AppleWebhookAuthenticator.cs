@@ -18,7 +18,7 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
     // Source:      https://www.apple.com/certificateauthority/AppleRootCA-G3.cer
     // SHA-256:     63343ABFB89A6A03EBB57E9B3F5FA7BE7C4F5C756F3017B3A8C488C3653E9179
     // Verify this value against Apple's Certificate Authority page before deploying to production.
-    private static readonly byte[] AppleRootCaG3Der = Convert.FromBase64String(
+    internal static readonly byte[] AppleRootCaG3Der = Convert.FromBase64String(
         "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwS" +
         "QXBwbGUgUm9vdCBDQSAtIEczMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9u" +
         "IEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcN" +
@@ -133,7 +133,9 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
 
         var signedPayload = AppleJwtHelper.ExtractSignedPayload(rawBody);
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        AppleCertificateChainValidator.ValidateSignature(signedPayload, _trustedRoots, now);
+        var revocation = _options.EnableOnlineRevocationCheck;
+        var outerVerificationTime = ResolveVerificationTime(signedPayload, now);
+        AppleCertificateChainValidator.ValidateSignature(signedPayload, _trustedRoots, outerVerificationTime, revocation);
 
         AppStoreNotificationPayload payload;
         try
@@ -150,14 +152,43 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
 
         if (!string.IsNullOrEmpty(payload.Data?.SignedTransactionInfo))
         {
-            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedTransactionInfo, _trustedRoots, now);
+            var txTime = ResolveVerificationTime(payload.Data.SignedTransactionInfo, now);
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedTransactionInfo, _trustedRoots, txTime, revocation);
             ValidateNestedTransaction(payload.Data.SignedTransactionInfo, environment);
         }
 
         if (!string.IsNullOrEmpty(payload.Data?.SignedRenewalInfo))
-            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedRenewalInfo, _trustedRoots, now);
+        {
+            var renewalTime = ResolveVerificationTime(payload.Data.SignedRenewalInfo, now);
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedRenewalInfo, _trustedRoots, renewalTime, revocation);
+        }
 
         return Task.CompletedTask;
+    }
+
+    private DateTime ResolveVerificationTime(string jwt, DateTime fallbackUtc)
+    {
+        if (!_options.ValidateCertificateAtSignedDate)
+            return fallbackUtc;
+
+        try
+        {
+            var bytes = AppleJwtHelper.DecodePayloadBytes(jwt);
+            using var doc = JsonDocument.Parse(bytes);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("signedDate", out var signedDateProp) &&
+                signedDateProp.ValueKind == JsonValueKind.Number &&
+                signedDateProp.TryGetInt64(out var millis))
+            {
+                return AppleJwtHelper.FromUnixTimeMilliseconds(millis)!.Value.UtcDateTime;
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            // Fall back to now; ValidateSignature will reject malformed JWTs cleanly.
+        }
+
+        return fallbackUtc;
     }
 
     /// <inheritdoc />

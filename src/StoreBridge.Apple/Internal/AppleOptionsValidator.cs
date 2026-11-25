@@ -26,6 +26,9 @@ internal static class AppleOptionsValidator
         if (options.MaxRetries < 1)
             errors.Add($"{nameof(AppleApiOptions.MaxRetries)} must be >= 1 (got {options.MaxRetries}).");
 
+        if (options.RequestTimeout <= TimeSpan.Zero)
+            errors.Add($"{nameof(AppleApiOptions.RequestTimeout)} must be greater than zero (got {options.RequestTimeout}).");
+
         if (string.IsNullOrWhiteSpace(options.PrivateKeyBase64))
         {
             errors.Add($"{nameof(AppleApiOptions.PrivateKeyBase64)} is required.");

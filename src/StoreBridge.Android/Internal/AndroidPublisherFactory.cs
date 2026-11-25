@@ -16,7 +16,7 @@ internal static class AndroidPublisherFactory
     /// </summary>
     /// <exception cref="FormatException">The value is not valid base64.</exception>
     /// <exception cref="InvalidOperationException">The JSON is not a valid service-account key.</exception>
-    internal static AndroidPublisherService Create(string credentialsBase64)
+    internal static AndroidPublisherService Create(string credentialsBase64, TimeSpan? requestTimeout = null)
     {
         var bytes = Convert.FromBase64String(credentialsBase64);
         GoogleCredential credential;
@@ -32,7 +32,7 @@ internal static class AndroidPublisherFactory
             CryptographicOperations.ZeroMemory(bytes);
         }
 
-        return new AndroidPublisherService(new BaseClientService.Initializer
+        var service = new AndroidPublisherService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
             ApplicationName = "StoreBridge",
@@ -40,5 +40,10 @@ internal static class AndroidPublisherFactory
             // so transient failures don't multiply into 3x3 = 9 requests.
             DefaultExponentialBackOffPolicy = ExponentialBackOffPolicy.None
         });
+
+        if (requestTimeout is { } timeout && timeout > TimeSpan.Zero)
+            service.HttpClient.Timeout = timeout;
+
+        return service;
     }
 }

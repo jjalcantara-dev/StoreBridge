@@ -479,4 +479,26 @@ public sealed class AndroidSubscriptionVerifierTests
         Assert.False(result.IsVerified);
         Assert.Contains(nameof(AndroidOptions.PackageName), result.ErrorMessage);
     }
+
+    [Fact]
+    public async Task VerifyAsync_MapsAcknowledgedLinkedTokenAndExternalAccountId()
+    {
+        var sub = ActiveSub();
+        sub.AcknowledgementState = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED";
+        sub.LinkedPurchaseToken = "old-token-000";
+        sub.ExternalAccountIdentifiers = new ExternalAccountIdentifiers
+        {
+            ObfuscatedExternalAccountId = "user-hash-42"
+        };
+
+        var client = Substitute.For<IAndroidSubscriptionsv2>();
+        client.GetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(sub);
+
+        var result = await Build(client).VerifyAsync("com.example.app", "premium_monthly", "token-001");
+
+        Assert.True(result.IsVerified);
+        Assert.True(result.IsAcknowledged);
+        Assert.Equal("old-token-000", result.LinkedPurchaseToken);
+        Assert.Equal("user-hash-42", result.ExternalAccountId);
+    }
 }

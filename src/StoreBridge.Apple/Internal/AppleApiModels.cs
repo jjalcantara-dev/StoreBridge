@@ -84,6 +84,12 @@ internal sealed class DecodedTransactionInfo
 
     [JsonPropertyName("revocationReason")]
     public int? RevocationReason { get; set; }
+
+    [JsonPropertyName("appAccountToken")]
+    public string? AppAccountToken { get; set; }
+
+    [JsonPropertyName("signedDate")]
+    public long? SignedDate { get; set; }
 }
 
 internal sealed class DecodedRenewalInfo
@@ -102,6 +108,9 @@ internal sealed class DecodedRenewalInfo
 
     [JsonPropertyName("gracePeriodExpiresDate")]
     public long? GracePeriodExpiresDate { get; set; }
+
+    [JsonPropertyName("signedDate")]
+    public long? SignedDate { get; set; }
 }
 
 internal sealed class AppStoreTransactionResponse

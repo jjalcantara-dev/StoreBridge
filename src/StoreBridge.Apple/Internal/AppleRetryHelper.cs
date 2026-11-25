@@ -21,9 +21,11 @@ internal static class AppleRetryHelper
             maxRetries = 1;
 
         Exception? lastEx = null;
+        TimeSpan? retryAfter = null;
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
+            retryAfter = null;
             try
             {
                 return await operation(cancellationToken);
@@ -31,6 +33,8 @@ internal static class AppleRetryHelper
             catch (HttpRequestException ex) when (IsTransient(ex))
             {
                 lastEx = ex;
+                if (ex is AppleHttpException appleEx)
+                    retryAfter = appleEx.RetryAfter;
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -40,12 +44,20 @@ internal static class AppleRetryHelper
             // Non-transient 4xx and caller cancellation propagate immediately — no retry
 
             if (attempt < maxRetries - 1)
-                await Task.Delay(
-                    TimeSpan.FromSeconds(DelaySeconds[Math.Min(attempt, DelaySeconds.Length - 1)]),
-                    cancellationToken);
+            {
+                var delay = retryAfter ?? AddJitter(TimeSpan.FromSeconds(DelaySeconds[Math.Min(attempt, DelaySeconds.Length - 1)]));
+                await Task.Delay(delay, cancellationToken);
+            }
         }
 
         throw lastEx!;
+    }
+
+    private static TimeSpan AddJitter(TimeSpan baseDelay)
+    {
+        // ±25% jitter to spread concurrent retries without materially changing backoff duration.
+        var factor = 0.75 + Random.Shared.NextDouble() * 0.5;
+        return TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * factor);
     }
 
     // Retry on network errors (no HTTP status), server errors (5xx) and rate limiting (429)

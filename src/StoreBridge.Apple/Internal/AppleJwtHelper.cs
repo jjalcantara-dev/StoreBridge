@@ -180,3 +180,33 @@ internal static class AppleJwtHelper
         return Base64Url.DecodeFromChars(parts[1]);
     }
 }
+
+/// <summary>
+/// Thread-safe per-verifier cache for the App Store Server API ES256 bearer JWT.
+/// Reuses the signed token for 15 minutes (leaving a 5-minute buffer before the 20-minute <c>exp</c>).
+/// </summary>
+internal sealed class AppleTokenCache
+{
+    private static readonly TimeSpan RefreshBuffer = TimeSpan.FromMinutes(5);
+
+    private readonly Lock _lock = new();
+    private string? _cachedToken;
+    private DateTimeOffset _expiresAtUtc;
+
+    internal string GetOrCreate(AppleApiOptions options, TimeProvider? timeProvider = null)
+    {
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+
+        lock (_lock)
+        {
+            if (_cachedToken is not null && now < _expiresAtUtc - RefreshBuffer)
+                return _cachedToken;
+
+            var token = AppleJwtHelper.GenerateToken(
+                options.KeyId, options.IssuerId, options.BundleId, options.PrivateKeyBase64);
+            _cachedToken = token;
+            _expiresAtUtc = now + AppleJwtHelper.TokenLifetime;
+            return token;
+        }
+    }
+}

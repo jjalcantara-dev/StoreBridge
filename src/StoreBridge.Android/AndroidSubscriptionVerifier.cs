@@ -69,7 +69,7 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier, IDispos
             if (_client is not null)
                 return _client;
 
-            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64);
+            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64, _options.RequestTimeout);
             _ownedService = service;
             var adapter = new GoogleSubscriptionsv2Adapter(service);
             Volatile.Write(ref _client, adapter);
@@ -244,6 +244,9 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier, IDispos
             CurrencyCode = price?.CurrencyCode ?? string.Empty,
             PriceDecimal = PriceConverter.FromGoogleMicros(priceMicros),
             CancelledByUser = sub.CanceledStateContext?.UserInitiatedCancellation != null,
+            IsAcknowledged = sub.AcknowledgementState == "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+            LinkedPurchaseToken = sub.LinkedPurchaseToken ?? string.Empty,
+            ExternalAccountId = sub.ExternalAccountIdentifiers?.ObfuscatedExternalAccountId ?? string.Empty,
             IsSandbox = sub.TestPurchase != null
         };
     }

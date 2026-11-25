@@ -14,7 +14,7 @@
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
 
     <!-- Shared package metadata (PackageId, Description, PackageTags stay per-project) -->
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Jesus Jimenez</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/jjalcantara-dev/StoreBridge</PackageProjectUrl>

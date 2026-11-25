@@ -191,4 +191,21 @@ public sealed class AndroidServiceCollectionExtensionsTests
 
         Assert.Single(sp.GetServices<ISubscriptionVerifier>());
     }
+
+    [Fact]
+    public void AddAndroidSubscriptions_NonPositiveRequestTimeout_ThrowsOnResolve()
+    {
+        var services = new ServiceCollection();
+        services.AddAndroidSubscriptions(opts =>
+        {
+            opts.PackageName       = "com.example.app";
+            opts.CredentialsBase64 = TestCredentials.ServiceAccountBase64;
+            opts.RequestTimeout    = TimeSpan.Zero;
+        });
+
+        using var sp = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(() => sp.GetRequiredService<AndroidSubscriptionVerifier>());
+        Assert.Contains("RequestTimeout", ex.Message);
+    }
 }

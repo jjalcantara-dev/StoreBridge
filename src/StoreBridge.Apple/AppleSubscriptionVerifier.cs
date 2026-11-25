@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StoreBridge.Internal;
 using StoreBridge.Apple.Internal;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 
 namespace StoreBridge.Apple;
@@ -20,6 +21,8 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
     private readonly HttpClient? _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly ILogger<AppleSubscriptionVerifier> _logger;
+    private readonly AppleTokenCache _tokenCache = new();
+    private readonly Lazy<X509Certificate2>? _trustedRoot;
     private bool _disposed;
 
     /// <inheritdoc />
@@ -37,7 +40,9 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<AppleSubscriptionVerifier>.Instance;
         _ownsHttpClient = httpClient == null;
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient ?? new HttpClient { Timeout = options.RequestTimeout };
+        if (options.VerifyResponseSignatures)
+            _trustedRoot = new Lazy<X509Certificate2>(() => X509CertificateLoader.LoadCertificate(AppleWebhookAuthenticator.AppleRootCaG3Der));
     }
 
     /// <summary>DI-friendly constructor that resolves an <see cref="HttpClient"/> from <see cref="IHttpClientFactory"/>.</summary>
@@ -51,6 +56,8 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _logger = logger ?? NullLogger<AppleSubscriptionVerifier>.Instance;
         _ownsHttpClient = false;
+        if (_options.VerifyResponseSignatures)
+            _trustedRoot = new Lazy<X509Certificate2>(() => X509CertificateLoader.LoadCertificate(AppleWebhookAuthenticator.AppleRootCaG3Der));
     }
 
     private HttpClient ResolveClient() => _httpClientFactory?.CreateClient(HttpClientName) ?? _httpClient!;
@@ -59,7 +66,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
     /// Verifies a subscription by its original transaction ID.
     /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors and, when
     /// <see cref="AppleApiOptions.SandboxFallback"/> is on, retries a production 404 against the sandbox.
-    /// The JWT is generated once and reused across retries.
+    /// The bearer JWT is cached and reused across requests until 5 minutes before expiry.
     /// </summary>
     /// <param name="receiptOrToken">The original transaction ID from the App Store.</param>
     /// <param name="productId">
@@ -81,9 +88,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         string jwtToken;
         try
         {
-            // Generate once — the token is valid for 20 minutes; all retries share it.
-            jwtToken = AppleJwtHelper.GenerateToken(
-                _options.KeyId, _options.IssuerId, _options.BundleId, _options.PrivateKeyBase64);
+            jwtToken = _tokenCache.GetOrCreate(_options);
         }
         catch (InvalidOperationException ex)
         {
@@ -122,14 +127,14 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         {
             return MapToResult(content, receiptOrToken, productId);
         }
-        catch (Exception ex) when (ex is JsonException or FormatException)
+        catch (Exception ex) when (ex is JsonException or FormatException or WebhookAuthenticationException)
         {
-            _logger.LogWarning(ex, "Apple subscription verification: response body could not be parsed for {TransactionId}", LogRedaction.Token(receiptOrToken));
-            return SubscriptionVerificationResult.Failure(Store, $"Apple API returned a malformed response: {ex.Message}");
+            _logger.LogWarning(ex, "Apple subscription verification: response body could not be parsed or verified for {TransactionId}", LogRedaction.Token(receiptOrToken));
+            return SubscriptionVerificationResult.Failure(Store, $"Apple API returned a malformed or unverified response: {ex.Message}");
         }
     }
 
-    /// <summary>Disposes the internal <see cref="HttpClient"/> if one was created by this instance.</summary>
+    /// <summary>Disposes the internal <see cref="HttpClient"/> and root certificate if created by this instance.</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -138,6 +143,8 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         _disposed = true;
         if (_ownsHttpClient)
             _httpClient?.Dispose();
+        if (_trustedRoot?.IsValueCreated == true)
+            _trustedRoot.Value.Dispose();
     }
 
     private SubscriptionVerificationResult MapToResult(string content, string originalTransactionId, string? productId)
@@ -193,6 +200,13 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
 
         var (lastTransaction, info) = match;
 
+        if (_trustedRoot is not null)
+        {
+            var roots = new[] { _trustedRoot.Value };
+            var txTime = AppleJwtHelper.FromUnixTimeMilliseconds(info.SignedDate)?.UtcDateTime ?? DateTime.UtcNow;
+            AppleCertificateChainValidator.ValidateSignature(lastTransaction.SignedTransactionInfo!, roots, txTime);
+        }
+
         if (!string.IsNullOrEmpty(info.BundleId) &&
             !string.IsNullOrEmpty(_options.BundleId) &&
             !string.Equals(info.BundleId, _options.BundleId, StringComparison.Ordinal))
@@ -203,7 +217,15 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
 
         DecodedRenewalInfo? renewalInfo = null;
         if (!string.IsNullOrEmpty(lastTransaction.SignedRenewalInfo))
+        {
             renewalInfo = AppleJwtHelper.DecodePayload<DecodedRenewalInfo>(lastTransaction.SignedRenewalInfo);
+            if (_trustedRoot is not null)
+            {
+                var roots = new[] { _trustedRoot.Value };
+                var renewalTime = AppleJwtHelper.FromUnixTimeMilliseconds(renewalInfo?.SignedDate)?.UtcDateTime ?? DateTime.UtcNow;
+                AppleCertificateChainValidator.ValidateSignature(lastTransaction.SignedRenewalInfo, roots, renewalTime);
+            }
+        }
 
         // autoRenewStatus 0 = off (user/App Store disabled), 1 = on
         var autoRenewOff = renewalInfo?.AutoRenewStatus == 0;
@@ -226,6 +248,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             CancelledByUser = autoRenewOff,
             AutoRenewProductId = renewalInfo?.AutoRenewProductId ?? string.Empty,
             GracePeriodExpiresAt = AppleJwtHelper.FromUnixTimeMilliseconds(renewalInfo?.GracePeriodExpiresDate),
+            ExternalAccountId = info.AppAccountToken ?? string.Empty,
             IsSandbox = AppleJwtHelper.IsNonProduction(info.Environment)
                      || AppleJwtHelper.IsNonProduction(parsed?.Environment)
         };

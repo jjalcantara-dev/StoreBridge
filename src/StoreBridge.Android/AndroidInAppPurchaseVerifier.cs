@@ -70,7 +70,7 @@ public sealed class AndroidInAppPurchaseVerifier : IInAppPurchaseVerifier, IDisp
             if (_client is not null)
                 return _client;
 
-            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64);
+            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64, _options.RequestTimeout);
             _ownedService = service;
             var adapter = new GoogleProductsAdapter(service);
             Volatile.Write(ref _client, adapter);

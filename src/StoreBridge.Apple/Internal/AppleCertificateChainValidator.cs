@@ -43,8 +43,13 @@ internal static class AppleCertificateChainValidator
     /// <param name="jwt">The full signed JWT string (header.payload.signature).</param>
     /// <param name="trustedRoots">The trusted Apple Root CA certificates to anchor the chain.</param>
     /// <param name="verificationTimeUtc">Instant at which certificate validity is evaluated (normally now).</param>
+    /// <param name="enableOnlineRevocationCheck">When true, performs online OCSP/CRL revocation check after root pinning succeeds.</param>
     /// <exception cref="WebhookAuthenticationException">Thrown when chain or signature validation fails.</exception>
-    internal static void ValidateSignature(string jwt, IReadOnlyCollection<X509Certificate2> trustedRoots, DateTime verificationTimeUtc)
+    internal static void ValidateSignature(
+        string jwt,
+        IReadOnlyCollection<X509Certificate2> trustedRoots,
+        DateTime verificationTimeUtc,
+        bool enableOnlineRevocationCheck = false)
     {
         var parts = jwt.Split('.', 4);
         if (parts.Length != 3)
@@ -54,7 +59,7 @@ internal static class AppleCertificateChainValidator
         try
         {
             ValidateMarkerExtensions(certs);
-            ValidateChain(certs, trustedRoots, verificationTimeUtc);
+            ValidateChain(certs, trustedRoots, verificationTimeUtc, enableOnlineRevocationCheck);
 
             using var publicKey = certs[0].GetECDsaPublicKey()
                 ?? throw new WebhookAuthenticationException("Leaf certificate does not contain an EC public key.");
@@ -182,7 +187,10 @@ internal static class AppleCertificateChainValidator
     }
 
     private static void ValidateChain(
-        List<X509Certificate2> certs, IReadOnlyCollection<X509Certificate2> trustedRoots, DateTime verificationTimeUtc)
+        List<X509Certificate2> certs,
+        IReadOnlyCollection<X509Certificate2> trustedRoots,
+        DateTime verificationTimeUtc,
+        bool enableOnlineRevocationCheck)
     {
         var leaf = certs[0];
         var intermediate = certs[1];
@@ -194,36 +202,65 @@ internal static class AppleCertificateChainValidator
         string? lastErrors = null;
         foreach (var root in trustedRoots)
         {
-            using var chain = new X509Chain();
-            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(root);
-            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            // Never follow AIA URLs from attacker-supplied certificates (blind SSRF / latency).
-            chain.ChainPolicy.DisableCertificateDownloads = true;
-            chain.ChainPolicy.VerificationTimeIgnored = false;
-            chain.ChainPolicy.VerificationTime = verificationTimeUtc;
-            // Only the intermediate from x5c is offered; x5c[2] (the root Apple embeds) is ignored
-            // on purpose — trust comes exclusively from the pinned roots.
-            chain.ChainPolicy.ExtraStore.Add(intermediate);
-
-            if (chain.Build(leaf))
+            if (BuildAndCheckChain(leaf, intermediate, root, verificationTimeUtc, X509RevocationMode.NoCheck, out var errors))
             {
-                // The chain must be exactly leaf → x5c intermediate → pinned root.
-                if (chain.ChainElements.Count == ExpectedChainLength &&
-                    chain.ChainElements[1].Certificate.RawDataMemory.Span.SequenceEqual(intermediate.RawDataMemory.Span))
-                {
+                if (!enableOnlineRevocationCheck)
                     return;
-                }
 
-                lastErrors = "chain did not pass through the x5c intermediate certificate";
+                // Only query OCSP/CRL *after* the chain is cryptographically anchored to a trusted root
+                // so attacker-supplied certificates can never trigger outbound requests (blind SSRF).
+                if (BuildAndCheckChain(leaf, intermediate, root, verificationTimeUtc, X509RevocationMode.Online, out var revErrors))
+                    return;
+
+                lastErrors = revErrors;
                 continue;
             }
 
-            lastErrors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
+            lastErrors = errors;
         }
 
         throw new WebhookAuthenticationException(
             $"Apple certificate chain validation failed: {lastErrors ?? "unknown error"}");
+    }
+
+    private static bool BuildAndCheckChain(
+        X509Certificate2 leaf,
+        X509Certificate2 intermediate,
+        X509Certificate2 root,
+        DateTime verificationTimeUtc,
+        X509RevocationMode revocationMode,
+        out string errors)
+    {
+        using var chain = new X509Chain();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(root);
+        chain.ChainPolicy.RevocationMode = revocationMode;
+        if (revocationMode != X509RevocationMode.NoCheck)
+            chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+        // Never follow AIA URLs from attacker-supplied certificates (blind SSRF / latency).
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.VerificationTimeIgnored = false;
+        chain.ChainPolicy.VerificationTime = verificationTimeUtc;
+        // Only the intermediate from x5c is offered; x5c[2] (the root Apple embeds) is ignored
+        // on purpose — trust comes exclusively from the pinned roots.
+        chain.ChainPolicy.ExtraStore.Add(intermediate);
+
+        if (chain.Build(leaf))
+        {
+            // The chain must be exactly leaf → x5c intermediate → pinned root.
+            if (chain.ChainElements.Count == ExpectedChainLength &&
+                chain.ChainElements[1].Certificate.RawDataMemory.Span.SequenceEqual(intermediate.RawDataMemory.Span))
+            {
+                errors = string.Empty;
+                return true;
+            }
+
+            errors = "chain did not pass through the x5c intermediate certificate";
+            return false;
+        }
+
+        errors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
+        return false;
     }
 
     private static void VerifyJwtSignature(string headerB64, string payloadB64, string signatureB64, ECDsa key)

@@ -57,11 +57,39 @@ internal static class AppleApiClient
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
+        {
+            var retryAfter = ParseRetryAfter(response.Headers.RetryAfter);
+            throw new AppleHttpException(
                 $"Apple API returned {(int)response.StatusCode}: {body}",
-                inner: null,
-                statusCode: response.StatusCode);
+                response.StatusCode,
+                retryAfter);
+        }
 
         return body;
     }
+
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(30);
+
+    private static TimeSpan? ParseRetryAfter(RetryConditionHeaderValue? header)
+    {
+        if (header is null)
+            return null;
+
+        TimeSpan? delay = header.Delta
+            ?? (header.Date.HasValue ? header.Date.Value - DateTimeOffset.UtcNow : null);
+
+        if (!delay.HasValue)
+            return null;
+
+        if (delay.Value < TimeSpan.Zero)
+            return TimeSpan.Zero;
+
+        return delay.Value > MaxRetryAfter ? MaxRetryAfter : delay.Value;
+    }
+}
+
+internal sealed class AppleHttpException(string message, HttpStatusCode statusCode, TimeSpan? retryAfter)
+    : HttpRequestException(message, inner: null, statusCode: statusCode)
+{
+    internal TimeSpan? RetryAfter { get; } = retryAfter;
 }

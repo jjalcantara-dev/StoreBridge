@@ -47,6 +47,14 @@ public sealed class AppleRealNotificationTests
     }
 
     [Fact]
+    public async Task RealAppleNotification_TodayWithValidateCertificateAtSignedDate_IsAccepted()
+    {
+        using var authenticator = Authenticator(TimeProvider.System, o => o.ValidateCertificateAtSignedDate = true);
+
+        await authenticator.ValidateAsync(Body(RealAppleNotifications.SandboxTestNotification));
+    }
+
+    [Fact]
     public async Task RealAppleNotification_ForAnotherBundle_IsRejected()
     {
         using var authenticator = Authenticator(AtSigningTime, o => o.BundleId = "com.example.app");
