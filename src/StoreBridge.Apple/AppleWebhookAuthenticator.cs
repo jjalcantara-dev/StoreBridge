@@ -36,6 +36,8 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
 
     private readonly AppleWebhookAuthenticatorOptions _options;
     private readonly List<X509Certificate2> _trustedRoots;
+    private readonly TimeProvider _timeProvider;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Apple;
@@ -57,7 +59,14 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
     /// DER-encoded root CA certificate bytes. Download the official certs from https://www.apple.com/certificateauthority/
     /// </param>
     public AppleWebhookAuthenticator(AppleWebhookAuthenticatorOptions options, IEnumerable<byte[]> trustedRootsDer)
+        : this(options, trustedRootsDer, TimeProvider.System) { }
+
+    /// <summary>Test seam: evaluates certificate validity at the time given by <paramref name="timeProvider"/>.</summary>
+    internal AppleWebhookAuthenticator(
+        AppleWebhookAuthenticatorOptions options, IEnumerable<byte[]> trustedRootsDer, TimeProvider timeProvider)
     {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _timeProvider = timeProvider;
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedRootsDer);
 
@@ -66,18 +75,38 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
                 $"{nameof(AppleWebhookAuthenticatorOptions.BundleId)} must be set.", nameof(options));
 
         _options = options;
-        _trustedRoots = trustedRootsDer
-            .Select(der => der ?? throw new ArgumentException("Trusted root entry cannot be null.", nameof(trustedRootsDer)))
-            .Select(X509CertificateLoader.LoadCertificate)
-            .ToList();
 
-        if (_trustedRoots.Count == 0)
+        var loadedRoots = new List<X509Certificate2>();
+        try
+        {
+            foreach (var der in trustedRootsDer)
+            {
+                if (der is null)
+                    throw new ArgumentException("Trusted root entry cannot be null.", nameof(trustedRootsDer));
+
+                loadedRoots.Add(X509CertificateLoader.LoadCertificate(der));
+            }
+        }
+        catch
+        {
+            foreach (var root in loadedRoots)
+                root.Dispose();
+            throw;
+        }
+
+        if (loadedRoots.Count == 0)
             throw new ArgumentException("At least one trusted root certificate must be supplied.", nameof(trustedRootsDer));
+
+        _trustedRoots = loadedRoots;
     }
 
     /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
     internal AppleWebhookAuthenticator(IOptions<AppleWebhookAuthenticatorOptions> options)
         : this(options?.Value ?? throw new ArgumentNullException(nameof(options))) { }
+
+    /// <summary>Test seam: built-in root, certificate validity evaluated at <paramref name="timeProvider"/>'s time.</summary>
+    internal AppleWebhookAuthenticator(AppleWebhookAuthenticatorOptions options, TimeProvider timeProvider)
+        : this(options, [AppleRootCaG3Der], timeProvider) { }
 
     /// <summary>
     /// Validates the App Store Server Notification: certificate chain and ECDSA signature of the signed
@@ -92,15 +121,19 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
     /// Thrown when a certificate chain is invalid or does not chain to a trusted Apple root, when a JWT
     /// signature does not match, or when the notification is for another app or a disallowed environment.
     /// </exception>
+    /// <exception cref="FormatException">The body is not a <c>{"signedPayload":"…"}</c> wrapper or a JWT.</exception>
     public Task ValidateAsync(string rawBody, string? bearerToken = null, CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (string.IsNullOrWhiteSpace(rawBody))
             throw new ArgumentException("Webhook body cannot be empty.", nameof(rawBody));
 
         cancellationToken.ThrowIfCancellationRequested();
 
         var signedPayload = AppleJwtHelper.ExtractSignedPayload(rawBody);
-        AppleCertificateChainValidator.ValidateSignature(signedPayload, _trustedRoots);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        AppleCertificateChainValidator.ValidateSignature(signedPayload, _trustedRoots, now);
 
         AppStoreNotificationPayload payload;
         try
@@ -117,12 +150,12 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
 
         if (!string.IsNullOrEmpty(payload.Data?.SignedTransactionInfo))
         {
-            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedTransactionInfo, _trustedRoots);
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedTransactionInfo, _trustedRoots, now);
             ValidateNestedTransaction(payload.Data.SignedTransactionInfo, environment);
         }
 
         if (!string.IsNullOrEmpty(payload.Data?.SignedRenewalInfo))
-            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedRenewalInfo, _trustedRoots);
+            AppleCertificateChainValidator.ValidateSignature(payload.Data.SignedRenewalInfo, _trustedRoots, now);
 
         return Task.CompletedTask;
     }
@@ -130,6 +163,10 @@ public sealed class AppleWebhookAuthenticator : IWebhookAuthenticator, IDisposab
     /// <inheritdoc />
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         foreach (var root in _trustedRoots)
             root.Dispose();
     }

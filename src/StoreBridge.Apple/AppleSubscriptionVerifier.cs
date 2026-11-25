@@ -20,6 +20,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
     private readonly HttpClient? _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly ILogger<AppleSubscriptionVerifier> _logger;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Apple;
@@ -43,7 +44,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
     internal AppleSubscriptionVerifier(
         IOptions<AppleSubscriptionOptions> options,
         IHttpClientFactory httpClientFactory,
-        ILogger<AppleSubscriptionVerifier> logger)
+        ILogger<AppleSubscriptionVerifier>? logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
@@ -71,6 +72,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         string? productId = null,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(receiptOrToken))
@@ -130,6 +132,10 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
     /// <summary>Disposes the internal <see cref="HttpClient"/> if one was created by this instance.</summary>
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         if (_ownsHttpClient)
             _httpClient?.Dispose();
     }
@@ -142,28 +148,58 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             .SelectMany(d => d.LastTransactions ?? [])
             .ToList() ?? [];
 
-        LastTransaction? lastTransaction;
+        if (allTransactions.Count == 0)
+            return SubscriptionVerificationResult.Failure(Store, "No transaction info found in Apple response.");
+
+        // Apple's LastTransactionsItem only has originalTransactionId, status, signedTransactionInfo and
+        // signedRenewalInfo — productId lives inside the decoded signedTransactionInfo JWT.
+        var decoded = new List<(LastTransaction Item, DecodedTransactionInfo Info)>(allTransactions.Count);
+        foreach (var item in allTransactions)
+        {
+            if (string.IsNullOrEmpty(item.SignedTransactionInfo))
+                continue;
+
+            var txInfo = AppleJwtHelper.DecodePayload<DecodedTransactionInfo>(item.SignedTransactionInfo);
+            if (txInfo != null)
+                decoded.Add((item, txInfo));
+        }
+
+        if (decoded.Count == 0)
+            return SubscriptionVerificationResult.Failure(Store, "No transaction info found in Apple response.");
+
+        (LastTransaction Item, DecodedTransactionInfo Info) match;
         if (productId == null)
         {
-            lastTransaction = allTransactions.FirstOrDefault();
+            // GET /inApps/v1/subscriptions/{transactionId} returns all subscription groups for the customer.
+            // Prefer the item matching the requested transaction ID before falling back to the first entry.
+            var byTx = decoded.FindIndex(x =>
+                string.Equals(x.Item.OriginalTransactionId, originalTransactionId, StringComparison.Ordinal) ||
+                string.Equals(x.Info.OriginalTransactionId, originalTransactionId, StringComparison.Ordinal) ||
+                string.Equals(x.Info.TransactionId, originalTransactionId, StringComparison.Ordinal));
+            match = byTx >= 0 ? decoded[byTx] : decoded[0];
         }
         else
         {
             // Never fall back to a different product: a client could otherwise present the token of a
             // cheap subscription while asking to unlock an expensive one.
-            lastTransaction = allTransactions.FirstOrDefault(t => string.Equals(t.ProductId, productId, StringComparison.Ordinal));
-            if (lastTransaction == null && allTransactions.Count > 0)
+            var byProduct = decoded.FindIndex(x => string.Equals(x.Info.ProductId, productId, StringComparison.Ordinal));
+            if (byProduct < 0)
                 return SubscriptionVerificationResult.Failure(Store,
                     $"No subscription for product '{productId}' found for this transaction " +
-                    $"(found: {string.Join(", ", allTransactions.Select(t => t.ProductId))}).");
+                    $"(found: {string.Join(", ", decoded.Select(x => x.Info.ProductId))}).");
+
+            match = decoded[byProduct];
         }
 
-        if (lastTransaction?.SignedTransactionInfo == null)
-            return SubscriptionVerificationResult.Failure(Store, "No transaction info found in Apple response.");
+        var (lastTransaction, info) = match;
 
-        var info = AppleJwtHelper.DecodePayload<DecodedTransactionInfo>(lastTransaction.SignedTransactionInfo);
-        if (info == null)
-            return SubscriptionVerificationResult.Failure(Store, "Failed to decode Apple transaction JWT.");
+        if (!string.IsNullOrEmpty(info.BundleId) &&
+            !string.IsNullOrEmpty(_options.BundleId) &&
+            !string.Equals(info.BundleId, _options.BundleId, StringComparison.Ordinal))
+        {
+            return SubscriptionVerificationResult.Failure(Store,
+                $"Transaction bundle '{info.BundleId}' does not match configured bundle '{_options.BundleId}'.");
+        }
 
         DecodedRenewalInfo? renewalInfo = null;
         if (!string.IsNullOrEmpty(lastTransaction.SignedRenewalInfo))
@@ -181,21 +217,15 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
             Status = status,
             SubscriptionId = info.OriginalTransactionId ?? originalTransactionId,
             ProductId = info.ProductId ?? string.Empty,
-            ExpiresAt = info.ExpiresDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(info.ExpiresDate.Value)
-                : null,
-            PurchasedAt = info.PurchaseDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(info.PurchaseDate.Value)
-                : null,
+            ExpiresAt = AppleJwtHelper.FromUnixTimeMilliseconds(info.ExpiresDate),
+            PurchasedAt = AppleJwtHelper.FromUnixTimeMilliseconds(info.PurchaseDate),
             IsPromotional = IsPromotional(info),
             PriceAmount = priceAmount,
             CurrencyCode = info.Currency ?? string.Empty,
             PriceDecimal = PriceConverter.FromApplePrice(priceAmount),
             CancelledByUser = autoRenewOff,
             AutoRenewProductId = renewalInfo?.AutoRenewProductId ?? string.Empty,
-            GracePeriodExpiresAt = renewalInfo?.GracePeriodExpiresDate.HasValue == true
-                ? DateTimeOffset.FromUnixTimeMilliseconds(renewalInfo.GracePeriodExpiresDate!.Value)
-                : null,
+            GracePeriodExpiresAt = AppleJwtHelper.FromUnixTimeMilliseconds(renewalInfo?.GracePeriodExpiresDate),
             IsSandbox = AppleJwtHelper.IsNonProduction(info.Environment)
                      || AppleJwtHelper.IsNonProduction(parsed?.Environment)
         };

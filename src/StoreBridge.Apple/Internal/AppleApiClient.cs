@@ -45,6 +45,9 @@ internal static class AppleApiClient
     private static async Task<string> SendAsync(
         HttpClient client, string jwt, string baseUrl, string id, CancellationToken cancellationToken)
     {
+        if (id is "." or "..")
+            throw new HttpRequestException($"Invalid Apple transaction identifier '{id}'.", inner: null, statusCode: HttpStatusCode.BadRequest);
+
         // Escape the identifier so a crafted value cannot alter the request path.
         var url = $"{baseUrl.TrimEnd('/')}/{Uri.EscapeDataString(id)}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);

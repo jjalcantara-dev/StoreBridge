@@ -25,9 +25,6 @@ internal sealed class LastTransaction
     [JsonPropertyName("originalTransactionId")]
     public string? OriginalTransactionId { get; set; }
 
-    [JsonPropertyName("productId")]
-    public string? ProductId { get; set; }
-
     [JsonPropertyName("status")]
     public int Status { get; set; }
 
@@ -97,8 +94,8 @@ internal sealed class DecodedRenewalInfo
     [JsonPropertyName("autoRenewProductId")]
     public string? AutoRenewProductId { get; set; }
 
-    [JsonPropertyName("expirationReason")]
-    public string? ExpirationReason { get; set; }
+    [JsonPropertyName("expirationIntent")]
+    public int? ExpirationIntent { get; set; }
 
     [JsonPropertyName("isInBillingRetryPeriod")]
     public bool? IsInBillingRetryPeriod { get; set; }

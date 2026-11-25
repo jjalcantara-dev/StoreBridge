@@ -20,6 +20,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
     private readonly HttpClient? _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly ILogger<AppleInAppPurchaseVerifier> _logger;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Apple;
@@ -43,7 +44,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
     internal AppleInAppPurchaseVerifier(
         IOptions<AppleInAppPurchaseOptions> options,
         IHttpClientFactory httpClientFactory,
-        ILogger<AppleInAppPurchaseVerifier> logger)
+        ILogger<AppleInAppPurchaseVerifier>? logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
@@ -68,6 +69,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         string? productId = null,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(purchaseToken))
@@ -126,6 +128,10 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
     /// <summary>Disposes the internal <see cref="HttpClient"/> if one was created by this instance.</summary>
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         if (_ownsHttpClient)
             _httpClient?.Dispose();
     }
@@ -140,6 +146,14 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         var info = AppleJwtHelper.DecodePayload<DecodedTransactionInfo>(parsed.SignedTransactionInfo);
         if (info == null)
             return InAppPurchaseVerificationResult.Failure(Store, "Failed to decode Apple transaction JWT.");
+
+        if (!string.IsNullOrEmpty(info.BundleId) &&
+            !string.IsNullOrEmpty(_options.BundleId) &&
+            !string.Equals(info.BundleId, _options.BundleId, StringComparison.Ordinal))
+        {
+            return InAppPurchaseVerificationResult.Failure(Store,
+                $"Transaction bundle '{info.BundleId}' does not match configured bundle '{_options.BundleId}'.");
+        }
 
         if (productId != null && !string.Equals(info.ProductId, productId, StringComparison.Ordinal))
             return InAppPurchaseVerificationResult.Failure(Store,
@@ -157,9 +171,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             Status = status,
             PurchaseId = info.TransactionId ?? transactionId,
             ProductId = info.ProductId ?? string.Empty,
-            PurchasedAt = info.PurchaseDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(info.PurchaseDate.Value)
-                : null,
+            PurchasedAt = AppleJwtHelper.FromUnixTimeMilliseconds(info.PurchaseDate),
             Quantity = info.Quantity ?? 1,
             PriceAmount = priceAmount,
             CurrencyCode = info.Currency ?? string.Empty,

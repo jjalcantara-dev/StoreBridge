@@ -86,7 +86,7 @@ public sealed class AppleSubscriptionVerifierTests
                     subscriptionGroupIdentifier = "group-001",
                     lastTransactions = new[]
                     {
-                        new { originalTransactionId = "tx-001", productId, status, signedTransactionInfo = signedTx, signedRenewalInfo = signedRenewal }
+                        new { originalTransactionId = "tx-001", status, signedTransactionInfo = signedTx, signedRenewalInfo = signedRenewal }
                     }
                 }
             }
@@ -441,5 +441,95 @@ public sealed class AppleSubscriptionVerifierTests
         var message = Assert.Single(logger.Messages);
         Assert.DoesNotContain("2000000123456789", message);
         Assert.Contains("2000…6789", message);
+    }
+
+    // ── multi-group selection, bundleId, timestamps, dispose ────
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_WithoutProductId_PrefersMatchingOriginalTransactionId()
+    {
+        var txOther = Jwt(new { originalTransactionId = "tx-other", transactionId = "tx-other", productId = "other_plan", environment = "Production" });
+        var txTarget = Jwt(new { originalTransactionId = "tx-target", transactionId = "tx-target", productId = "target_plan", environment = "Production" });
+
+        var response = JsonSerializer.Serialize(new
+        {
+            environment = "Production",
+            data = new[]
+            {
+                new { subscriptionGroupIdentifier = "g1", lastTransactions = new[] { new { originalTransactionId = "tx-other", status = 1, signedTransactionInfo = txOther } } },
+                new { subscriptionGroupIdentifier = "g2", lastTransactions = new[] { new { originalTransactionId = "tx-target", status = 1, signedTransactionInfo = txTarget } } }
+            }
+        });
+
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, response));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-target", productId: null);
+
+        Assert.True(result.IsVerified);
+        Assert.Equal("target_plan", result.ProductId);
+        Assert.Equal("tx-target", result.SubscriptionId);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_BundleIdMismatch_ReturnsFailure()
+    {
+        var signedTx = Jwt(new
+        {
+            originalTransactionId = "tx-001",
+            transactionId = "tx-001",
+            bundleId = "com.other.app",
+            productId = "premium_monthly",
+            environment = "Production"
+        });
+        var response = JsonSerializer.Serialize(new
+        {
+            environment = "Production",
+            data = new[]
+            {
+                new { subscriptionGroupIdentifier = "g1", lastTransactions = new[] { new { originalTransactionId = "tx-001", status = 1, signedTransactionInfo = signedTx } } }
+            }
+        });
+
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, response));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("com.other.app", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_OutOfRangeTimestamp_ReturnsFailure()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse(expiresDate: long.MaxValue)));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("tx-001", "premium_monthly");
+
+        Assert.False(result.IsVerified);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_DotDotTransactionId_ReturnsFailureWithoutCallingApi()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse()));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+
+        var result = await verifier.VerifySubscriptionAsync("..", "premium_monthly");
+
+        Assert.False(result.IsVerified);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.OK, BuildResponse()));
+        var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler));
+        verifier.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => verifier.VerifySubscriptionAsync("tx-001"));
     }
 }

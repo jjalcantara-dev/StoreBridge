@@ -40,6 +40,9 @@ internal static class AppleOptionsValidator
                 var keyBytes = Convert.FromBase64String(options.PrivateKeyBase64);
                 using var ecdsa = ECDsa.Create();
                 ecdsa.ImportPkcs8PrivateKey(keyBytes, out _);
+                if (ecdsa.KeySize != 256)
+                    errors.Add(
+                        $"{nameof(AppleApiOptions.PrivateKeyBase64)} must be a P-256 (256-bit) ECDSA key for ES256 signing (got {ecdsa.KeySize}-bit).");
             }
             catch (FormatException ex)
             {

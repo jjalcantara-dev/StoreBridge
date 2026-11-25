@@ -46,6 +46,10 @@ internal static class AppleJwtHelper
                 "headers) were base64-encoded as-is.", ex);
         }
 
+        if (ecdsa.KeySize != 256)
+            throw new InvalidOperationException(
+                $"Apple PrivateKeyBase64 must be a P-256 (256-bit) ECDSA key for ES256 signing (got {ecdsa.KeySize}-bit).");
+
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         var header = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
@@ -76,16 +80,41 @@ internal static class AppleJwtHelper
     /// Extracts the signed payload JWT from a raw webhook body.
     /// Accepts either a JSON wrapper <c>{"signedPayload":"..."}</c> or a bare JWT string.
     /// </summary>
+    /// <exception cref="FormatException">The body is not valid JSON, or <c>signedPayload</c> is missing or not a string.</exception>
     internal static string ExtractSignedPayload(string rawBody)
     {
         if (!rawBody.TrimStart().StartsWith('{'))
             return rawBody.Trim();
 
-        using var doc = JsonDocument.Parse(rawBody);
-        if (!doc.RootElement.TryGetProperty("signedPayload", out var sp))
-            throw new FormatException("Missing 'signedPayload' field in webhook body.");
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(rawBody);
+        }
+        catch (JsonException ex)
+        {
+            throw new FormatException($"Webhook body is not valid JSON: {ex.Message}", ex);
+        }
 
-        return sp.GetString() ?? throw new FormatException("'signedPayload' is null.");
+        using (doc)
+        {
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("signedPayload", out var sp))
+                throw new FormatException("Missing 'signedPayload' field in webhook body.");
+
+            if (sp.ValueKind != JsonValueKind.String)
+                throw new FormatException("'signedPayload' must be a string.");
+
+            try
+            {
+                return sp.GetString()!;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // e.g. an escaped lone surrogate ("\ud800") that cannot be transcoded to UTF-16
+                throw new FormatException("'signedPayload' is not a valid JSON string.", ex);
+            }
+        }
     }
 
     /// <summary>
@@ -100,6 +129,25 @@ internal static class AppleJwtHelper
         string.IsNullOrEmpty(subtype) ? (type ?? string.Empty) : $"{type}:{subtype}";
 
     /// <summary>
+    /// Converts a Unix millisecond timestamp to <see cref="DateTimeOffset"/>, wrapping out-of-range
+    /// values into <see cref="FormatException"/>.
+    /// </summary>
+    internal static DateTimeOffset? FromUnixTimeMilliseconds(long? millis)
+    {
+        if (!millis.HasValue)
+            return null;
+
+        try
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(millis.Value);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            throw new FormatException($"Unix timestamp '{millis.Value}' is out of range.", ex);
+        }
+    }
+
+    /// <summary>
     /// Whether an Apple <c>environment</c> value denotes a non-production environment
     /// (<c>Sandbox</c>, <c>Xcode</c>, <c>LocalTesting</c>, …).
     /// </summary>
@@ -108,13 +156,24 @@ internal static class AppleJwtHelper
         !string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Decodes a JWT payload without validating the signature.</summary>
-    internal static T? DecodePayload<T>(string jwt) =>
-        JsonSerializer.Deserialize<T>(DecodePayloadBytes(jwt));
+    /// <exception cref="FormatException">The JWT is malformed or its payload does not match <typeparamref name="T"/>.</exception>
+    internal static T? DecodePayload<T>(string jwt)
+    {
+        var bytes = DecodePayloadBytes(jwt);
+        try
+        {
+            return JsonSerializer.Deserialize<T>(bytes);
+        }
+        catch (JsonException ex)
+        {
+            throw new FormatException($"JWT payload is not a valid {typeof(T).Name}: {ex.Message}", ex);
+        }
+    }
 
     /// <summary>Returns the raw UTF-8 JSON bytes of a JWT payload without validating the signature.</summary>
     internal static byte[] DecodePayloadBytes(string jwt)
     {
-        var parts = jwt.Split('.');
+        var parts = jwt.Split('.', 4);
         if (parts.Length != 3)
             throw new FormatException("Invalid JWT format: expected 3 parts.");
 
