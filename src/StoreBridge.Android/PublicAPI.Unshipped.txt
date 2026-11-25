@@ -4,7 +4,7 @@ StoreBridge.Android.AndroidInAppPurchaseOptions.AndroidInAppPurchaseOptions() ->
 StoreBridge.Android.AndroidInAppPurchaseVerifier
 StoreBridge.Android.AndroidInAppPurchaseVerifier.AndroidInAppPurchaseVerifier(StoreBridge.Android.AndroidInAppPurchaseOptions! options, Google.Apis.AndroidPublisher.v3.AndroidPublisherService? service = null, Microsoft.Extensions.Logging.ILogger<StoreBridge.Android.AndroidInAppPurchaseVerifier!>? logger = null) -> void
 StoreBridge.Android.AndroidInAppPurchaseVerifier.Store.get -> StoreBridge.Store
-StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyAsync(string! packageName, string! productId, string! purchaseToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
+StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyAsync(string! packageName, string? productId, string! purchaseToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
 StoreBridge.Android.AndroidInAppPurchaseVerifier.VerifyPurchaseAsync(string! purchaseToken, string? productId = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<StoreBridge.InAppPurchaseVerificationResult!>!
 StoreBridge.Android.AndroidInAppPurchaseWebhookParser
 StoreBridge.Android.AndroidInAppPurchaseWebhookParser.AndroidInAppPurchaseWebhookParser() -> void

@@ -102,7 +102,7 @@ Internal helpers live under `StoreBridge.Apple/Internal/`: `AppleJwtHelper.cs` (
 
 ### Android implementation
 
-`AndroidSubscriptionVerifier` (Subscriptionsv2 API) and `AndroidInAppPurchaseVerifier` (Products API) lazily initialize their Google API clients from base64-encoded service account credentials JSON via `AndroidPublisherFactory`. An HTTP 410 Gone response is treated as the purchase no longer being valid.
+`AndroidSubscriptionVerifier` (Subscriptionsv2 API) and `AndroidInAppPurchaseVerifier` (Productsv2 API — `getproductpurchasev2`) lazily initialize their Google API clients from base64-encoded service account credentials JSON via `AndroidPublisherFactory`. An HTTP 410 Gone response is treated as the purchase no longer being valid.
 
 Both verifiers use thin internal interfaces (`IAndroidSubscriptionsv2`, `IAndroidProducts`) that wrap the concrete Google client. This allows unit testing with NSubstitute without mocking the Google SDK directly. Both verifiers expose an internal constructor that accepts these interfaces.
 
@@ -116,7 +116,12 @@ Internal helpers: `AndroidPublisherFactory.cs`, `AndroidPubSubModels.cs`, `Andro
 
 Android subscription prices come from `lineItems[].autoRenewingPlan.recurringPrice` (list price in micros; excludes taxes and offer discounts; empty for prepaid plans). The voided-purchase notification does not carry the SKU; its `orderId` goes to `OrderId` and `ProductId` stays empty.
 
-Credentials are loaded with `CredentialFactory.FromStream<ServiceAccountCredential>(...).ToGoogleCredential()` (sync API; replaces the deprecated `GoogleCredential.FromStream`, which also accepted `external_account` configs that can point at arbitrary files/URLs). One-time purchases still use `purchases.products.get` (v1): Google now recommends `purchases.productsv2.getproductpurchasev2` but v1 is not deprecated, and acknowledge/consume only exist in v1.
+Credentials are loaded with `CredentialFactory.FromStream<ServiceAccountCredential>(...).ToGoogleCredential()` (sync API; replaces the deprecated `GoogleCredential.FromStream`, which also accepted `external_account` configs that can point at arbitrary files/URLs). One-time purchases use `purchases.productsv2.getproductpurchasev2`: token-only call; an optional `productId` must match a `productLineItem` (else `Failure`); `PURCHASED` + `refundableQuantity == 0` → `Refunded`, consumption state `CONSUMED` → `Consumed`; `OrderId` and `RefundableQuantity` are surfaced; `testPurchaseContext` → `IsSandbox`. Acknowledge/consume (still v1 `purchases.products`) are not wrapped.
+
+### Logging
+
+Never log raw purchase tokens or transaction IDs: wrap them with `LogRedaction.Token(...)` (`src/Shared/LogRedaction.cs`,
+namespace `StoreBridge.Internal`, compiled into both platform packages through a linked `<Compile Include>`).
 
 ### Testing
 
@@ -132,7 +137,7 @@ A separate **sample** project under `samples/StoreBridge.Sample.Web/` is a minim
 
 ## Publishing
 
-Releases are triggered by pushing a semver git tag. GitHub Actions (`.github/workflows/publish.yml`) extracts the version from the tag, builds with `-p:Version=<tag>` (so assembly versions match), packs all three projects, and pushes to NuGet.org using the `NUGET_API_KEY` secret. No manual intervention is required.
+Releases are triggered by pushing a semver git tag. GitHub Actions (`.github/workflows/publish.yml`) extracts the version from the tag, builds with `-p:Version=<tag>` (so assembly versions match), packs all three projects, and pushes to NuGet.org via **Trusted Publishing** (`NuGet/login@v1` exchanges the job's OIDC token — `permissions: id-token: write` — for a short-lived API key). Needs a Trusted Publishing policy on nuget.org for `publish.yml` and the `NUGET_USER` secret (nuget.org profile name).
 
 ```bash
 git tag v1.0.0

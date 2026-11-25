@@ -426,4 +426,20 @@ public sealed class AppleSubscriptionVerifierTests
         Assert.True(result.IsSandbox);
         Assert.Contains("storekit-sandbox", handler.RequestUris[1].Host);
     }
+
+    // ── log hygiene ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task VerifySubscriptionAsync_Failure_LogsRedactedTransactionId()
+    {
+        var logger = new CapturingLogger<AppleSubscriptionVerifier>();
+        var handler = new FakeHttpMessageHandler((HttpStatusCode.Unauthorized, "{}"));
+        using var verifier = new AppleSubscriptionVerifier(BuildOptions(), new HttpClient(handler), logger);
+
+        await verifier.VerifySubscriptionAsync("2000000123456789", "premium_monthly");
+
+        var message = Assert.Single(logger.Messages);
+        Assert.DoesNotContain("2000000123456789", message);
+        Assert.Contains("2000…6789", message);
+    }
 }

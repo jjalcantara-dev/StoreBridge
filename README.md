@@ -457,14 +457,18 @@ Google's `purchases.subscriptionsv2.get` returns *all* line items for the order;
 ```csharp
 var result = await verifier.VerifyPurchaseAsync(
     purchaseToken,
-    productId: "coins_100");
+    productId: "coins_100");   // optional, recommended — when given, the purchase MUST be for this product
 
-if (result.IsVerified)
+if (result.IsVerified && result.Status == PurchaseStatus.Purchased)
 {
-    // result.Status: Purchased / Consumed / Pending / Cancelled
-    Console.WriteLine($"Acknowledged: {result.IsAcknowledged}");
+    // result.Status: Purchased / Consumed / Pending / Cancelled / Refunded
+    Console.WriteLine($"Acknowledged:       {result.IsAcknowledged}");
+    Console.WriteLine($"Order:              {result.OrderId}");          // matches voided-purchase notifications
+    Console.WriteLine($"Units not refunded: {result.RefundableQuantity}"); // multi-quantity partial refunds
 }
 ```
+
+Uses Google's `purchases.productsv2.getproductpurchasev2` (the endpoint Google recommends since one-time products gained multiple purchase options and offers). It only needs the purchase token; the product ID you pass is checked against the purchase's line items. `Refunded` is reported when every unit has been refunded (`refundableQuantity = 0`); with a partial refund the status stays `Purchased` and `RefundableQuantity` tells you how many units are still valid. Acknowledging/consuming purchases is not wrapped by StoreBridge (Google keeps those on `purchases.products`).
 
 ### Retries
 
@@ -574,6 +578,8 @@ result.PurchaseId           // transactionId (Apple) / purchaseToken (Google)
 result.ProductId
 result.PurchasedAt
 result.Quantity             // defaults to 1
+result.RefundableQuantity   // int? — Google only: units not refunded yet
+result.OrderId              // Google order ID (e.g. "GPA.…"); empty for Apple
 result.IsAcknowledged       // Google only
 result.IsSandbox
 result.PriceAmount
@@ -836,7 +842,15 @@ All tests are unit tests — there are no integration tests against real Apple/G
 
 ## Releasing new versions
 
-Releases are fully automated via GitHub Actions ([`.github/workflows/publish.yml`](.github/workflows/publish.yml)). Push a semver git tag and the workflow restores, builds, tests, packs all three NuGet packages, and pushes them to NuGet.org using the `NUGET_API_KEY` repository secret:
+Releases are fully automated via GitHub Actions ([`.github/workflows/publish.yml`](.github/workflows/publish.yml)). Push a semver git tag and the workflow restores, builds, tests, packs all three NuGet packages, and pushes them to NuGet.org using [**Trusted Publishing**](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): the job trades its GitHub OIDC token for a short-lived NuGet API key, so no long-lived key is stored in the repository.
+
+One-time setup:
+
+1. On nuget.org → your account → **Trusted Publishing**, add a policy for this repository: owner `jjalcantara-dev`, repository `StoreBridge`, workflow file `publish.yml`.
+2. In GitHub → repository **Settings → Secrets and variables → Actions**, add `NUGET_USER` with your nuget.org **profile name** (not your email).
+3. After the first successful release, delete the old `NUGET_API_KEY` secret and revoke that key on nuget.org.
+
+Then:
 
 ```bash
 git tag v1.2.0
@@ -844,6 +858,8 @@ git push origin v1.2.0
 ```
 
 The workflow extracts the version from the tag (`v1.2.0` → `1.2.0`) and passes it to both the build (assembly versions) and the pack (package version), so you don't edit `Version` in source.
+
+> **Logging.** The verifiers never log full purchase tokens or transaction IDs: they appear masked (`abcd…wxyz (len 150)`), enough to correlate log lines without leaking the identifier.
 
 ---
 

@@ -28,4 +28,9 @@
     <ProjectReference Include="..\StoreBridge\StoreBridge.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared internal helpers compiled into each platform package -->
+    <Compile Include="..\Shared\LogRedaction.cs" Link="Internal\LogRedaction.cs" />
+  </ItemGroup>
+
 </Project>

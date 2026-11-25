@@ -4,6 +4,7 @@ using Google.Apis.AndroidPublisher.v3.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using StoreBridge.Internal;
 using StoreBridge.Android.Internal;
 using System.Net;
 
@@ -127,18 +128,18 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
         catch (Google.GoogleApiException ex)
         {
             _logger.LogWarning(ex, "Google subscription verification failed for token {PurchaseToken} ({StatusCode})",
-                purchaseToken, ex.HttpStatusCode);
+                LogRedaction.Token(purchaseToken), ex.HttpStatusCode);
             return SubscriptionVerificationResult.Failure(
                 Store, $"Google API error {(int)ex.HttpStatusCode}: {ex.Message}");
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "Google subscription verification: network error for token {PurchaseToken}", purchaseToken);
+            _logger.LogWarning(ex, "Google subscription verification: network error for token {PurchaseToken}", LogRedaction.Token(purchaseToken));
             return SubscriptionVerificationResult.Failure(Store, $"Google API network error: {ex.Message}");
         }
         catch (TimeoutException ex)
         {
-            _logger.LogWarning(ex, "Google subscription verification timed out for token {PurchaseToken}", purchaseToken);
+            _logger.LogWarning(ex, "Google subscription verification timed out for token {PurchaseToken}", LogRedaction.Token(purchaseToken));
             return SubscriptionVerificationResult.Failure(Store, ex.Message);
         }
         catch (TokenResponseException ex)

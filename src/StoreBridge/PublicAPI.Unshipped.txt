@@ -170,3 +170,7 @@ StoreBridge.InAppPurchaseNotification.RefundReviewToken.init -> void
 StoreBridge.NotificationEventType.RefundReversed = 11 -> StoreBridge.NotificationEventType
 StoreBridge.SubscriptionStatusExtensions
 static StoreBridge.SubscriptionStatusExtensions.GrantsAccess(this StoreBridge.SubscriptionStatus status) -> bool
+StoreBridge.InAppPurchaseVerificationResult.OrderId.get -> string!
+StoreBridge.InAppPurchaseVerificationResult.OrderId.init -> void
+StoreBridge.InAppPurchaseVerificationResult.RefundableQuantity.get -> int?
+StoreBridge.InAppPurchaseVerificationResult.RefundableQuantity.init -> void

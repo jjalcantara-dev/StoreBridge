@@ -26,6 +26,18 @@ public sealed class InAppPurchaseVerificationResult
     /// <summary>Number of units purchased. Relevant for consumables; defaults to 1.</summary>
     public int Quantity { get; init; } = 1;
 
+    /// <summary>
+    /// Google only: units not refunded yet (reflects quantity-based partial refunds). <see langword="null"/>
+    /// when the store does not report it. Grant consumables for this many units, not <see cref="Quantity"/>.
+    /// </summary>
+    public int? RefundableQuantity { get; init; }
+
+    /// <summary>
+    /// Store order identifier when available (Google <c>orderId</c>, e.g. "GPA.1234-…"); matches
+    /// <see cref="InAppPurchaseNotification.OrderId"/> of voided / refund-review notifications. Empty otherwise.
+    /// </summary>
+    public string OrderId { get; init; } = string.Empty;
+
     /// <summary>Google only: whether the purchase has been acknowledged by the app.</summary>
     public bool IsAcknowledged { get; init; }
 

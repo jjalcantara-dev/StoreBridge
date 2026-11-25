@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using StoreBridge.Internal;
 using StoreBridge.Apple.Internal;
 using System.Text.Json;
 
@@ -106,12 +107,12 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "Apple subscription verification failed for transaction {TransactionId}", receiptOrToken);
+            _logger.LogWarning(ex, "Apple subscription verification failed for transaction {TransactionId}", LogRedaction.Token(receiptOrToken));
             return SubscriptionVerificationResult.Failure(Store, $"Apple API error: {ex.Message}");
         }
         catch (TimeoutException ex)
         {
-            _logger.LogWarning(ex, "Apple subscription verification timed out for transaction {TransactionId}", receiptOrToken);
+            _logger.LogWarning(ex, "Apple subscription verification timed out for transaction {TransactionId}", LogRedaction.Token(receiptOrToken));
             return SubscriptionVerificationResult.Failure(Store, ex.Message);
         }
 
@@ -121,7 +122,7 @@ public sealed class AppleSubscriptionVerifier : ISubscriptionVerifier, IDisposab
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
-            _logger.LogWarning(ex, "Apple subscription verification: response body could not be parsed for {TransactionId}", receiptOrToken);
+            _logger.LogWarning(ex, "Apple subscription verification: response body could not be parsed for {TransactionId}", LogRedaction.Token(receiptOrToken));
             return SubscriptionVerificationResult.Failure(Store, $"Apple API returned a malformed response: {ex.Message}");
         }
     }

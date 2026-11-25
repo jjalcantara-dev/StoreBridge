@@ -5,6 +5,14 @@ on:
     tags:
       - "v*.*.*"
 
+# NuGet Trusted Publishing: the job exchanges a GitHub OIDC token for a short-lived NuGet API key,
+# so no long-lived NUGET_API_KEY secret is stored. Requires a Trusted Publishing policy on nuget.org
+# (repository owner + repository + workflow file "publish.yml") and the NUGET_USER repository secret
+# (your nuget.org profile name, not your email).
+permissions:
+  contents: read
+  id-token: write   # required to request the GitHub OIDC token
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -41,5 +49,12 @@ jobs:
       - name: Pack StoreBridge.Android
         run: dotnet pack src/StoreBridge.Android/StoreBridge.Android.csproj --no-build --configuration Release -p:Version=${{ steps.version.outputs.VERSION }} --output ./nupkgs
 
+      # Logged in right before pushing: the API key it returns is short-lived.
+      - name: NuGet login (Trusted Publishing / OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Push to NuGet.org
-        run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
