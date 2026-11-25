@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StoreBridge.Internal;
 using StoreBridge.Apple.Internal;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 
 namespace StoreBridge.Apple;
@@ -20,6 +21,9 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
     private readonly HttpClient? _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly ILogger<AppleInAppPurchaseVerifier> _logger;
+    private readonly AppleTokenCache _tokenCache = new();
+    private readonly Lazy<X509Certificate2>? _trustedRoot;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Apple;
@@ -36,20 +40,24 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<AppleInAppPurchaseVerifier>.Instance;
         _ownsHttpClient = httpClient == null;
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient ?? new HttpClient { Timeout = options.RequestTimeout };
+        if (options.VerifyResponseSignatures)
+            _trustedRoot = new Lazy<X509Certificate2>(() => X509CertificateLoader.LoadCertificate(AppleWebhookAuthenticator.AppleRootCaG3Der));
     }
 
     /// <summary>DI-friendly constructor that resolves an <see cref="HttpClient"/> from <see cref="IHttpClientFactory"/>.</summary>
     internal AppleInAppPurchaseVerifier(
         IOptions<AppleInAppPurchaseOptions> options,
         IHttpClientFactory httpClientFactory,
-        ILogger<AppleInAppPurchaseVerifier> logger)
+        ILogger<AppleInAppPurchaseVerifier>? logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _logger = logger ?? NullLogger<AppleInAppPurchaseVerifier>.Instance;
         _ownsHttpClient = false;
+        if (_options.VerifyResponseSignatures)
+            _trustedRoot = new Lazy<X509Certificate2>(() => X509CertificateLoader.LoadCertificate(AppleWebhookAuthenticator.AppleRootCaG3Der));
     }
 
     private HttpClient ResolveClient() => _httpClientFactory?.CreateClient(HttpClientName) ?? _httpClient!;
@@ -58,7 +66,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
     /// Verifies a one-time purchase by its transaction ID.
     /// Retries up to <see cref="AppleApiOptions.MaxRetries"/> times on transient HTTP errors and, when
     /// <see cref="AppleApiOptions.SandboxFallback"/> is on, retries a production 404 against the sandbox.
-    /// The JWT is generated once and reused across retries.
+    /// The bearer JWT is cached and reused across requests until 5 minutes before expiry.
     /// </summary>
     /// <param name="purchaseToken">The transaction ID from the App Store.</param>
     /// <param name="productId">Optional. If provided, validates that the returned transaction matches this product.</param>
@@ -68,6 +76,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         string? productId = null,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(purchaseToken))
@@ -76,8 +85,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         string jwtToken;
         try
         {
-            jwtToken = AppleJwtHelper.GenerateToken(
-                _options.KeyId, _options.IssuerId, _options.BundleId, _options.PrivateKeyBase64);
+            jwtToken = _tokenCache.GetOrCreate(_options);
         }
         catch (InvalidOperationException ex)
         {
@@ -116,18 +124,24 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         {
             return MapToResult(content, purchaseToken, productId);
         }
-        catch (Exception ex) when (ex is JsonException or FormatException)
+        catch (Exception ex) when (ex is JsonException or FormatException or WebhookAuthenticationException)
         {
-            _logger.LogWarning(ex, "Apple in-app purchase verification: response body could not be parsed for {TransactionId}", LogRedaction.Token(purchaseToken));
-            return InAppPurchaseVerificationResult.Failure(Store, $"Apple API returned a malformed response: {ex.Message}");
+            _logger.LogWarning(ex, "Apple in-app purchase verification: response body could not be parsed or verified for {TransactionId}", LogRedaction.Token(purchaseToken));
+            return InAppPurchaseVerificationResult.Failure(Store, $"Apple API returned a malformed or unverified response: {ex.Message}");
         }
     }
 
-    /// <summary>Disposes the internal <see cref="HttpClient"/> if one was created by this instance.</summary>
+    /// <summary>Disposes the internal <see cref="HttpClient"/> and root certificate if created by this instance.</summary>
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         if (_ownsHttpClient)
             _httpClient?.Dispose();
+        if (_trustedRoot?.IsValueCreated == true)
+            _trustedRoot.Value.Dispose();
     }
 
     private InAppPurchaseVerificationResult MapToResult(string content, string transactionId, string? productId)
@@ -140,6 +154,21 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
         var info = AppleJwtHelper.DecodePayload<DecodedTransactionInfo>(parsed.SignedTransactionInfo);
         if (info == null)
             return InAppPurchaseVerificationResult.Failure(Store, "Failed to decode Apple transaction JWT.");
+
+        if (_trustedRoot is not null)
+        {
+            var roots = new[] { _trustedRoot.Value };
+            var txTime = AppleJwtHelper.FromUnixTimeMilliseconds(info.SignedDate)?.UtcDateTime ?? DateTime.UtcNow;
+            AppleCertificateChainValidator.ValidateSignature(parsed.SignedTransactionInfo, roots, txTime);
+        }
+
+        if (!string.IsNullOrEmpty(info.BundleId) &&
+            !string.IsNullOrEmpty(_options.BundleId) &&
+            !string.Equals(info.BundleId, _options.BundleId, StringComparison.Ordinal))
+        {
+            return InAppPurchaseVerificationResult.Failure(Store,
+                $"Transaction bundle '{info.BundleId}' does not match configured bundle '{_options.BundleId}'.");
+        }
 
         if (productId != null && !string.Equals(info.ProductId, productId, StringComparison.Ordinal))
             return InAppPurchaseVerificationResult.Failure(Store,
@@ -157,9 +186,7 @@ public sealed class AppleInAppPurchaseVerifier : IInAppPurchaseVerifier, IDispos
             Status = status,
             PurchaseId = info.TransactionId ?? transactionId,
             ProductId = info.ProductId ?? string.Empty,
-            PurchasedAt = info.PurchaseDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(info.PurchaseDate.Value)
-                : null,
+            PurchasedAt = AppleJwtHelper.FromUnixTimeMilliseconds(info.PurchaseDate),
             Quantity = info.Quantity ?? 1,
             PriceAmount = priceAmount,
             CurrencyCode = info.Currency ?? string.Empty,

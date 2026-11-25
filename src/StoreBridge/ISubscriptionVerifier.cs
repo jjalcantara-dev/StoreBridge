@@ -16,8 +16,8 @@ public interface ISubscriptionVerifier
     /// For Google: the purchase token.
     /// </param>
     /// <param name="productId">
-    /// For Google: the subscription product ID (required to query the Play API).
-    /// For Apple: optional, used only for filtering when multiple products exist.
+    /// For Google: required. The expected subscription product ID, used to select and validate the matching line item.
+    /// For Apple: optional, used to filter and validate when multiple products exist.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<SubscriptionVerificationResult> VerifySubscriptionAsync(

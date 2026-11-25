@@ -21,6 +21,8 @@ public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParse
     /// <param name="cancellationToken">Cancellation token.</param>
     public Task<InAppPurchaseNotification> ParseAsync(string rawBody, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (string.IsNullOrWhiteSpace(rawBody))
             throw new ArgumentException("Webhook body cannot be empty.", nameof(rawBody));
 
@@ -33,6 +35,8 @@ public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParse
                 outerPayload.Data.SignedTransactionInfo);
         }
 
+        var environment = outerPayload.Data?.Environment ?? outerPayload.Summary?.Environment;
+
         var notification = new InAppPurchaseNotification
         {
             Store = Store,
@@ -41,10 +45,8 @@ public sealed class AppleInAppPurchaseWebhookParser : IInAppPurchaseWebhookParse
             NotificationId = outerPayload.NotificationUUID ?? string.Empty,
             PurchaseId = transactionInfo?.TransactionId ?? string.Empty,
             ProductId = transactionInfo?.ProductId ?? string.Empty,
-            EventAt = outerPayload.SignedDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(outerPayload.SignedDate.Value)
-                : null,
-            IsSandbox = AppleJwtHelper.IsNonProduction(outerPayload.Data?.Environment)
+            EventAt = AppleJwtHelper.FromUnixTimeMilliseconds(outerPayload.SignedDate),
+            IsSandbox = AppleJwtHelper.IsNonProduction(environment)
         };
 
         return Task.FromResult(notification);

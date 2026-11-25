@@ -3,8 +3,8 @@
   <!-- Common build + package metadata is in src/Directory.Build.props -->
   <PropertyGroup>
     <PackageId>StoreBridge.Apple</PackageId>
-    <Description>Apple App Store Server API integration for subscription verification and webhook handling in .NET.</Description>
-    <PackageTags>apple;appstore;subscription;iap;in-app-purchase;storekit;billing;mobile</PackageTags>
+    <Description>App Store Server API client and App Store Server Notifications V2 handling for .NET: verify subscriptions and one-time purchases, and authenticate signed webhooks (x5c chain to Apple Root CA - G3, ES256, bundle binding).</Description>
+    <PackageTags>apple;appstore;app-store-server-api;server-notifications;storekit;subscription;iap;in-app-purchase;jws;webhooks;billing</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,6 +13,12 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>StoreBridge.Apple.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

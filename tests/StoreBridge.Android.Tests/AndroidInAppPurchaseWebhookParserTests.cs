@@ -73,13 +73,13 @@ public sealed class AndroidInAppPurchaseWebhookParserTests
         {
             version = "1.0",
             packageName = "com.example",
-            eventTimeMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            eventTimeMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(),
             voidedPurchaseNotification = new
             {
                 purchaseToken = "voided-token",
                 orderId = "GPA.0000-0000-0000",
                 refundType = 1,
-                productType = 1
+                productType = 2
             }
         };
         var result = await _parser.ParseAsync(BuildPubSubBody(notification));
@@ -88,7 +88,28 @@ public sealed class AndroidInAppPurchaseWebhookParserTests
         Assert.Equal("voided-token", result.PurchaseId);
         Assert.Equal("GPA.0000-0000-0000", result.OrderId);
         Assert.Equal(string.Empty, result.ProductId);
-        Assert.StartsWith("VOIDED:", result.RawEventType);
+        Assert.Equal("VOIDED:1:2", result.RawEventType);
+        Assert.NotNull(result.EventAt);
+    }
+
+    [Fact]
+    public async Task ParseAsync_VoidedSubscriptionNotification_ThrowsFormatException()
+    {
+        var notification = new
+        {
+            version = "1.0",
+            packageName = "com.example",
+            eventTimeMillis = "1735689600000",
+            voidedPurchaseNotification = new
+            {
+                purchaseToken = "voided-sub-token",
+                orderId = "GPA.0000-0000-0001",
+                refundType = 1,
+                productType = 1
+            }
+        };
+
+        await Assert.ThrowsAsync<FormatException>(() => _parser.ParseAsync(BuildPubSubBody(notification)));
     }
 
     [Fact]

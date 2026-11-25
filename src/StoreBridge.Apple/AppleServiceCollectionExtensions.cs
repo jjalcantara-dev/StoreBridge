@@ -101,40 +101,54 @@ public static class AppleServiceCollectionExtensions
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AppleWebhookAuthenticatorOptions>, AppleWebhookAuthenticatorOptionsValidator>());
-        services.AddSingleton<AppleWebhookParser>();
-        services.AddSingleton<IWebhookParser>(sp => sp.GetRequiredService<AppleWebhookParser>());
-        services.AddSingleton<AppleInAppPurchaseWebhookParser>();
-        services.AddSingleton<IInAppPurchaseWebhookParser>(sp => sp.GetRequiredService<AppleInAppPurchaseWebhookParser>());
+        services.TryAddSingleton<AppleWebhookParser>();
+        TryAddForwardedSingleton<IWebhookParser, AppleWebhookParser>(services);
+        services.TryAddSingleton<AppleInAppPurchaseWebhookParser>();
+        TryAddForwardedSingleton<IInAppPurchaseWebhookParser, AppleInAppPurchaseWebhookParser>(services);
         // Anchors to the built-in Apple Root CA - G3.
-        services.AddSingleton(sp => new AppleWebhookAuthenticator(
+        services.TryAddSingleton(sp => new AppleWebhookAuthenticator(
             sp.GetRequiredService<IOptions<AppleWebhookAuthenticatorOptions>>()));
-        services.AddSingleton<IWebhookAuthenticator>(sp => sp.GetRequiredService<AppleWebhookAuthenticator>());
+        TryAddForwardedSingleton<IWebhookAuthenticator, AppleWebhookAuthenticator>(services);
         return services;
     }
 
     private static IServiceCollection AddSubscriptionVerifierCore(IServiceCollection services)
     {
-        services.AddHttpClient(AppleSubscriptionVerifier.HttpClientName);
+        services.AddHttpClient(AppleSubscriptionVerifier.HttpClientName)
+            .ConfigureHttpClient((sp, client) =>
+                client.Timeout = sp.GetRequiredService<IOptions<AppleSubscriptionOptions>>().Value.RequestTimeout);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AppleSubscriptionOptions>, AppleSubscriptionOptionsValidator>());
-        services.AddSingleton(sp => new AppleSubscriptionVerifier(
+        services.TryAddSingleton(sp => new AppleSubscriptionVerifier(
             sp.GetRequiredService<IOptions<AppleSubscriptionOptions>>(),
             sp.GetRequiredService<IHttpClientFactory>(),
-            sp.GetRequiredService<ILogger<AppleSubscriptionVerifier>>()));
-        services.AddSingleton<ISubscriptionVerifier>(sp => sp.GetRequiredService<AppleSubscriptionVerifier>());
+            sp.GetService<ILogger<AppleSubscriptionVerifier>>()));
+        TryAddForwardedSingleton<ISubscriptionVerifier, AppleSubscriptionVerifier>(services);
         return services;
     }
 
     private static IServiceCollection AddInAppPurchaseVerifierCore(IServiceCollection services)
     {
-        services.AddHttpClient(AppleInAppPurchaseVerifier.HttpClientName);
+        services.AddHttpClient(AppleInAppPurchaseVerifier.HttpClientName)
+            .ConfigureHttpClient((sp, client) =>
+                client.Timeout = sp.GetRequiredService<IOptions<AppleInAppPurchaseOptions>>().Value.RequestTimeout);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AppleInAppPurchaseOptions>, AppleInAppPurchaseOptionsValidator>());
-        services.AddSingleton(sp => new AppleInAppPurchaseVerifier(
+        services.TryAddSingleton(sp => new AppleInAppPurchaseVerifier(
             sp.GetRequiredService<IOptions<AppleInAppPurchaseOptions>>(),
             sp.GetRequiredService<IHttpClientFactory>(),
-            sp.GetRequiredService<ILogger<AppleInAppPurchaseVerifier>>()));
-        services.AddSingleton<IInAppPurchaseVerifier>(sp => sp.GetRequiredService<AppleInAppPurchaseVerifier>());
+            sp.GetService<ILogger<AppleInAppPurchaseVerifier>>()));
+        TryAddForwardedSingleton<IInAppPurchaseVerifier, AppleInAppPurchaseVerifier>(services);
         return services;
+    }
+
+    // Typed Func<IServiceProvider, TImpl> preserves TImpl as the descriptor's implementation type so
+    // TryAddEnumerable deduplicates repeated Apple registrations without colliding with Android's.
+    private static void TryAddForwardedSingleton<TInterface, TImpl>(IServiceCollection services)
+        where TInterface : class
+        where TImpl : class, TInterface
+    {
+        Func<IServiceProvider, TImpl> factory = static sp => sp.GetRequiredService<TImpl>();
+        services.TryAddEnumerable(new ServiceDescriptor(typeof(TInterface), factory, ServiceLifetime.Singleton));
     }
 }

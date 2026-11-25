@@ -54,6 +54,26 @@ public sealed class SubscriptionVerificationResult
     /// </summary>
     public DateTimeOffset? GracePeriodExpiresAt { get; init; }
 
+    /// <summary>
+    /// Google only: whether the subscription has been acknowledged by the app (Google auto-refunds
+    /// unacknowledged subscriptions after 3 days). Always <see langword="false"/> for Apple.
+    /// </summary>
+    public bool IsAcknowledged { get; init; }
+
+    /// <summary>
+    /// Google only: the previous purchase token when the user upgraded, downgraded, or resubscribed.
+    /// Use it to revoke or transfer entitlements from the old subscription so access is not double-granted.
+    /// Empty for Apple or initial purchases.
+    /// </summary>
+    public string LinkedPurchaseToken { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Application-supplied account identifier bound to the subscription when present:
+    /// Apple <c>appAccountToken</c> (UUID string) or Google <c>externalAccountIdentifiers.obfuscatedExternalAccountId</c>.
+    /// Useful to verify the subscription belongs to the requesting user and prevent cross-account replay.
+    /// </summary>
+    public string ExternalAccountId { get; init; } = string.Empty;
+
     /// <summary>Whether this transaction came from a sandbox/test environment.</summary>
     public bool IsSandbox { get; init; }
 

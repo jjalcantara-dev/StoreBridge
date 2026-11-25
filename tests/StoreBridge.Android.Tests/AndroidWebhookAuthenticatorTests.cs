@@ -232,4 +232,31 @@ public sealed class AndroidWebhookAuthenticatorTests
         await Assert.ThrowsAsync<WebhookAuthenticationException>(
             () => authenticator.ValidateAsync(PubSubBody("com.other.app"), bearerToken: "eyJtoken"));
     }
+
+    [Fact]
+    public async Task ValidateAsync_ExpectedPackageName_MalformedBody_ThrowsWebhookAuthenticationException()
+    {
+        var validator = Substitute.For<IGoogleTokenValidator>();
+        validator
+            .ValidateAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Payload(ServiceAccountEmail));
+        var options = DefaultOptions;
+        options.ExpectedPackageName = "com.example.app";
+
+        var authenticator = new AndroidWebhookAuthenticator(options, validator);
+
+        await Assert.ThrowsAsync<WebhookAuthenticationException>(
+            () => authenticator.ValidateAsync("{not json", bearerToken: "eyJtoken"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_BearerPrefixWithOnlyWhitespace_ThrowsWebhookAuthenticationException()
+    {
+        var validator = Substitute.For<IGoogleTokenValidator>();
+        var authenticator = new AndroidWebhookAuthenticator(DefaultOptions, validator);
+
+        await Assert.ThrowsAsync<WebhookAuthenticationException>(
+            () => authenticator.ValidateAsync("body", bearerToken: "Bearer    "));
+        await validator.DidNotReceiveWithAnyArgs().ValidateAsync(default!, default!, default);
+    }
 }

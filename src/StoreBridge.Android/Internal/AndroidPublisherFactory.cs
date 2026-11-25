@@ -1,6 +1,8 @@
 using Google.Apis.AndroidPublisher.v3;
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.Http;
 using Google.Apis.Services;
+using System.Security.Cryptography;
 
 namespace StoreBridge.Android.Internal;
 
@@ -14,18 +16,34 @@ internal static class AndroidPublisherFactory
     /// </summary>
     /// <exception cref="FormatException">The value is not valid base64.</exception>
     /// <exception cref="InvalidOperationException">The JSON is not a valid service-account key.</exception>
-    internal static AndroidPublisherService Create(string credentialsBase64)
+    internal static AndroidPublisherService Create(string credentialsBase64, TimeSpan? requestTimeout = null)
     {
         var bytes = Convert.FromBase64String(credentialsBase64);
-        using var stream = new MemoryStream(bytes);
-        var credential = CredentialFactory.FromStream<ServiceAccountCredential>(stream)
-            .ToGoogleCredential()
-            .CreateScoped(Scope);
+        GoogleCredential credential;
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            credential = CredentialFactory.FromStream<ServiceAccountCredential>(stream)
+                .ToGoogleCredential()
+                .CreateScoped(Scope);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
 
-        return new AndroidPublisherService(new BaseClientService.Initializer
+        var service = new AndroidPublisherService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
-            ApplicationName = "StoreBridge"
+            ApplicationName = "StoreBridge",
+            // Retries are managed by AndroidRetryHelper; disable the SDK's built-in 503 retries
+            // so transient failures don't multiply into 3x3 = 9 requests.
+            DefaultExponentialBackOffPolicy = ExponentialBackOffPolicy.None
         });
+
+        if (requestTimeout is { } timeout && timeout > TimeSpan.Zero)
+            service.HttpClient.Timeout = timeout;
+
+        return service;
     }
 }

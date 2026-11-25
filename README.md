@@ -20,10 +20,9 @@
 10. [Normalized models reference](#normalized-models-reference)
 11. [Robust exception handling](#robust-exception-handling)
 12. [Sample web app](#sample-web-app)
-13. [Building from source](#building-from-source)
-14. [Releasing new versions](#releasing-new-versions)
-15. [Trademarks](#trademarks)
-16. [License](#license)
+13. [Changelog and contributing](#changelog-and-contributing)
+14. [Trademarks](#trademarks)
+15. [License](#license)
 
 ---
 
@@ -50,11 +49,11 @@ If you only need one store today, install only that package — there is no tran
 
 | Package | What's in it | NuGet |
 |---|---|---|
-| `StoreBridge` | Core abstractions and shared models (`ISubscriptionVerifier`, `IInAppPurchaseVerifier`, `IWebhookParser`, `IWebhookAuthenticator`, all DTOs and enums). No platform deps. | `StoreBridge` |
-| `StoreBridge.Apple` | App Store Server API v1 + Server Notifications v2. Pulls in `StoreBridge`, `Microsoft.IdentityModel.JsonWebTokens`, `System.IdentityModel.Tokens.Jwt`. | `StoreBridge.Apple` |
-| `StoreBridge.Android` | Google Play Developer API v3 + Pub/Sub. Pulls in `StoreBridge` and `Google.Apis.AndroidPublisher.v3`. | `StoreBridge.Android` |
+| `StoreBridge` | Core abstractions and shared models (`ISubscriptionVerifier`, `IInAppPurchaseVerifier`, `IWebhookParser`, `IWebhookAuthenticator`, all DTOs and enums). No platform deps. | [StoreBridge](https://www.nuget.org/packages/StoreBridge) |
+| `StoreBridge.Apple` | App Store Server API v1 + Server Notifications v2. Pulls in `StoreBridge` and `Microsoft.Extensions.*` abstractions only — JWTs are signed and verified with `System.Security.Cryptography`, no JWT library. | [StoreBridge.Apple](https://www.nuget.org/packages/StoreBridge.Apple) |
+| `StoreBridge.Android` | Google Play Developer API v3 + Pub/Sub. Pulls in `StoreBridge`, `Google.Apis.AndroidPublisher.v3` and `Microsoft.Extensions.*` abstractions. | [StoreBridge.Android](https://www.nuget.org/packages/StoreBridge.Android) |
 
-All packages ship symbols (`.snupkg`) and Source Link metadata so consumers can step into the source from a debugger.
+All packages target `net10.0` and ship XML docs, symbols (`.snupkg`) and Source Link metadata so you can step into the source from a debugger.
 
 ---
 
@@ -198,14 +197,30 @@ builder.Services.AddAppleSubscriptions(opts =>
 
     // Optional: disable the production → sandbox retry on 404 (default true)
     // opts.SandboxFallback = false;
+
+    // Optional: per-attempt HTTP timeout (default 30 s)
+    // opts.RequestTimeout = TimeSpan.FromSeconds(30);
+
+    // Optional: also verify Apple's x5c chain + ES256 signature of the JWS in API responses
+    // (defence in depth on top of TLS; default false)
+    // opts.VerifyResponseSignatures = true;
 });
 builder.Services.AddAppleInAppPurchases(opts => { /* same four fields */ });
 builder.Services.AddAppleWebhooks(opts =>
 {
     opts.BundleId   = configuration["Apple:BundleId"]!;
     opts.AppAppleId = long.Parse(configuration["Apple:AppAppleId"]!); // App Store Connect → App Information → Apple ID
+
+    // Optional (default false): evaluate certificate validity at each JWS's signedDate, like Apple's own
+    // libraries do — keeps retried / history notifications verifiable after Apple rotates its leaf certificate
+    // opts.ValidateCertificateAtSignedDate = true;
+
+    // Optional (default false): online OCSP/CRL revocation check of Apple's signing chain
+    // opts.EnableOnlineRevocationCheck = true;
 });
 ```
+
+The Apple verifiers cache the signed App Store Server API bearer token (valid 20 minutes) and reuse it for 15 minutes, so a busy server doesn't sign a new JWT per request.
 
 ### Sandbox vs Production for Apple
 
@@ -225,6 +240,8 @@ opts.TransactionsBaseUrl  = "https://api.storekit.itunes.apple.com/inApps/v1/tra
 ```
 
 `SubscriptionVerificationResult.IsSandbox` tells you which environment the *transaction* actually came from, regardless of which endpoint you hit.
+
+> **Sandbox transactions verify successfully.** With the fallback on, a TestFlight / App Review purchase returns `IsVerified = true` and `IsSandbox = true`. Unless you intentionally grant sandbox access in production, check `!result.IsSandbox` before granting paid entitlements.
 
 ---
 
@@ -304,7 +321,10 @@ builder.Services.AddAndroidWebhooks(opts =>
     opts.ExpectedServiceAccountEmail = "play-verifier@my-project.iam.gserviceaccount.com"; // required
     opts.ExpectedPackageName         = "com.example.app"; // optional — rejects notifications for other apps
 });
+// …or bind from configuration: builder.Services.AddAndroidWebhooks(configuration.GetSection("Google:Webhook"));
 ```
+
+Android options also accept `MaxRetries` (default 3) and `RequestTimeout` (per-attempt HTTP timeout, default 30 s). The Google SDK's own retry policy is disabled so that StoreBridge's retries don't multiply with it.
 
 > **Sandbox for Google:** there is no separate endpoint. Make purchases as a [licensed tester](https://support.google.com/googleplay/android-developer/answer/9845334); their transactions come back with `IsSandbox = true` (the Play API marks them as `testPurchase`).
 
@@ -320,13 +340,16 @@ builder.Services.AddAndroidWebhooks(opts =>
 
 **Apple — `AppleWebhookAuthenticator`:**
 - Reads the `x5c` certificate chain from the signed JWT header.
-- Requires `alg = ES256` and exactly three certificates (leaf, intermediate, root), like Apple's own App Store Server Libraries.
+- Requires `alg = ES256` and exactly three certificates (leaf, intermediate, root), like Apple's own App Store Server Libraries. The leaf key must be P-256 and the signature exactly 64 bytes; oversized headers or certificate entries are rejected before decoding.
 - Requires Apple's marker extensions: `1.2.840.113635.100.6.11.1` on the leaf and `1.2.840.113635.100.6.2.1` on the intermediate. Apple Root CA - G3 also anchors other Apple PKI hierarchies; without these checks any EC certificate issued under it would be accepted.
 - Builds the X.509 chain leaf → x5c intermediate → **Apple Root CA - G3** (bundled into the assembly), checking every certificate's validity window. Certificate downloads (AIA) are disabled, so attacker-supplied certificates can't make your server fetch URLs.
 - Verifies the ES256 signature of the outer JWT against the leaf's public key.
 - **Verifies the nested `signedTransactionInfo` and `signedRenewalInfo` JWTs the same way.**
 - **Binds the notification to your app:** the `bundleId` (from `data`, `summary` or `externalPurchaseToken`, and in the nested transaction) must equal `BundleId`; production notifications must carry `AppAppleId` when you set it; non-production environments are rejected when `AllowSandbox = false`. A genuine Apple signature alone only proves *Apple* signed it — not that it is for *your* app.
 - Bearer token parameter is ignored (Apple's signature is self-contained inside the JWT).
+- **Opt-in:** `ValidateCertificateAtSignedDate` evaluates certificate validity at each JWS's `signedDate` instead of now (Apple's libraries do the same when online checks are off), and `EnableOnlineRevocationCheck` adds an OCSP/CRL check. The revocation check only runs after the chain has been anchored to the pinned root and the marker OIDs verified, so attacker-supplied certificates can never trigger outbound requests.
+
+Malformed input never escapes as an unexpected exception: the authenticator throws only `WebhookAuthenticationException`, `FormatException` (body is not a `signedPayload` wrapper / JWT) or `ArgumentException` (empty body). This contract is fuzz-tested, together with end-to-end tests against a notification genuinely signed by Apple.
 
 The bundled Apple Root CA - G3 has these fingerprints — verify against Apple's [Certificate Authority](https://www.apple.com/certificateauthority/) page before deploying to production:
 
@@ -421,8 +444,13 @@ if (result.IsVerified && result.Status.GrantsAccess())   // Active, Cancelled (s
     Console.WriteLine($"Sandbox:           {result.IsSandbox}");
     Console.WriteLine($"In grace until:    {result.GracePeriodExpiresAt}");
     Console.WriteLine($"Next renewal SKU:  {result.AutoRenewProductId}");
+    Console.WriteLine($"App account token: {result.ExternalAccountId}");  // appAccountToken, if your app set one
 }
 ```
+
+The API answers with every subscription group of the customer. Apple's `lastTransactions` items carry no product ID, so StoreBridge decodes each `signedTransactionInfo` and matches `productId` against the decoded transaction (no match → failure). Without `productId`, it prefers the item for the transaction ID you passed. The decoded transaction's `bundleId` must also equal the configured `BundleId`.
+
+Use `ExternalAccountId` (Apple `appAccountToken` / Google `obfuscatedExternalAccountId`) to check that the purchase belongs to the user making the request — it stops one account from replaying another account's transaction ID or purchase token.
 
 ### Apple — one-time IAP
 
@@ -450,6 +478,8 @@ var result = await verifier.VerifyAsync(
     "com.example.app", "premium_monthly", purchaseToken);
 ```
 
+Besides the common fields, Google subscriptions report `IsAcknowledged` (unacknowledged subscriptions are refunded by Google after 3 days), `LinkedPurchaseToken` (the previous token after an upgrade, downgrade or resubscribe — revoke the old entitlement so access isn't granted twice) and `ExternalAccountId`.
+
 Google's `purchases.subscriptionsv2.get` returns *all* line items for the order; StoreBridge uses the one whose `productId` matches what you passed. If none matches, the result is a **failure** — it never falls back to another product, so a token for a cheap subscription can't unlock an expensive one (the Apple verifier behaves the same way when you pass `productId`). If Google returns `410 Gone` (subscription expired ≥60 days ago and was purged), StoreBridge returns `IsVerified = true` with `Status = Expired` — that's the correct outcome, not an error.
 
 ### Google — one-time IAP
@@ -472,7 +502,7 @@ Uses Google's `purchases.productsv2.getproductpurchasev2` (the endpoint Google r
 
 ### Retries
 
-Both stores' verifiers retry on transient errors (5xx, 429 Too Many Requests, network failures and HTTP timeouts) using fibonacci-spaced delays (1, 2, 3, 5, 8 seconds). Other 4xx responses are not retried — they aren't transient. Default `MaxRetries = 3`; tune via options. The signing JWT is generated once per call and reused across retries.
+Both stores' verifiers retry on transient errors (5xx, 429 Too Many Requests, network failures and HTTP timeouts) using fibonacci-spaced delays (1, 2, 3, 5, 8 seconds) with ±25 % jitter. When Apple sends a `Retry-After` header, it is honoured (capped at 30 s). Other 4xx responses are not retried — they aren't transient. Default `MaxRetries = 3` and `RequestTimeout = 30 s`; tune via options.
 
 ---
 
@@ -541,7 +571,7 @@ switch (purchaseNotification.EventType)
 }
 ```
 
-> **About `voidedPurchaseNotification`:** Google's voided-purchase payload doesn't carry the SKU, only an `orderId`, which StoreBridge surfaces in `OrderId` (`ProductId` stays empty). Correlate via `PurchaseId` (the purchase token) or `OrderId`. Voided **subscriptions** (`productType = 1`) are also understood by `AndroidWebhookParser` (as `Refunded` / `Revoked`).
+> **About `voidedPurchaseNotification`:** Google's voided-purchase payload doesn't carry the SKU, only an `orderId`, which StoreBridge surfaces in `OrderId` (`ProductId` stays empty). Correlate via `PurchaseId` (the purchase token) or `OrderId`. Voided **subscriptions** (`productType = 1`) are handled **only** by `AndroidWebhookParser` (as `Refunded` / `Revoked`); `AndroidInAppPurchaseWebhookParser` throws `FormatException` for them, so try the subscription parser first (as the sample app does).
 
 > **About `pendingRefundReviewNotification`:** Google now asks developers to review some chargebacks. StoreBridge maps it to `RefundReviewRequested` with `OrderId` and `RefundReviewToken`; send your suggestion to the Play Developer API `orders.reviewRefund` (not wrapped by StoreBridge) within 24 hours.
 
@@ -568,6 +598,9 @@ result.PriceDecimal         // decimal — human-readable
 result.CurrencyCode         // ISO 4217 (e.g. "USD")
 result.AutoRenewProductId   // Apple only — SKU of the next renewal cycle (may differ on plan change)
 result.GracePeriodExpiresAt // Apple only
+result.IsAcknowledged       // Google only — false for Apple
+result.LinkedPurchaseToken  // Google only — previous token after upgrade/downgrade/resubscribe
+result.ExternalAccountId    // Apple appAccountToken / Google obfuscatedExternalAccountId
 result.ErrorMessage         // string? — set when IsVerified = false
 
 // InAppPurchaseVerificationResult
@@ -643,7 +676,7 @@ Use `status.GrantsAccess()` to decide entitlement: it is `true` for `Active`, `C
 |---|---|
 | `Renewed` | Both |
 | `AutoRenewDisabled` | Both — user turned off auto-renew |
-| `AutoRenewEnabled` | Both — user re-enabled auto-renew (Google `SUBSCRIPTION_RESTARTED`) |
+| `AutoRenewEnabled` | Both — user re-enabled auto-renew (Apple `DID_CHANGE_RENEWAL_STATUS:AUTO_RENEW_ENABLED`, Google `SUBSCRIPTION_RESTARTED`). A `DID_CHANGE_RENEWAL_STATUS` without a known subtype maps to `Other` |
 | `Created` | Both |
 | `InBillingRetry` | Both — billing retry without/after grace period (Apple `DID_FAIL_TO_RENEW` w/o subtype, `GRACE_PERIOD_EXPIRED`; Google `ON_HOLD`) |
 | `GracePeriod` | Both — billing failed, retrying |
@@ -725,8 +758,11 @@ The verifiers never let store-side or network exceptions escape to your handler.
 | `InvalidOperationException` / `FormatException` from JWT/credential setup | → `Failure` with the original remediation message in `ErrorMessage` (credential loading is retried on the next call, not cached as a failure) |
 | Empty `originalTransactionId` / `purchaseToken` / `packageName` / `productId` | → `Failure` without hitting the network |
 | `OperationCanceledException` / `TaskCanceledException` caused by **your** `cancellationToken` | **Always propagates.** Each verifier calls `cancellationToken.ThrowIfCancellationRequested()` on entry so cancellation works even with fake HTTP handlers in tests |
+| Signature/bundle mismatch in the API response (`VerifyResponseSignatures`, configured `BundleId`) | → `Failure` |
 
-Webhook auth/parse exceptions are intentionally NOT caught by the library — you want to return `401` on `WebhookAuthenticationException` and `400` on `FormatException` from the parsers. Wrap them yourself (see [Wiring it up](#wiring-it-up) above).
+All four verifiers and `AppleWebhookAuthenticator` implement `IDisposable` (the DI container disposes them); calling one after `Dispose` throws `ObjectDisposedException`.
+
+Webhook auth/parse exceptions are intentionally NOT caught by the library — you want to return `401` on `WebhookAuthenticationException` and `400` on `FormatException` / `ArgumentException` from the parsers. Those are the only exception types they throw for bad input (fuzz-tested). Wrap them yourself (see [Wiring it up](#wiring-it-up) above).
 
 ### Retries — what is transient
 
@@ -758,6 +794,10 @@ app.MapPost("/verify/apple", async (AppleSubscriptionVerifier v, VerifyRequest r
 ```
 
 You don't need a try/catch around the verifier call — the only thing that can throw is `OperationCanceledException` (your caller cancelled) or `OptionsValidationException` (DI-time config error, which you should hit before deployment).
+
+### Logging
+
+The verifiers never log full purchase tokens or transaction IDs: they appear masked (`abcd…wxyz (len 150)`), enough to correlate log lines without leaking the identifier.
 
 ---
 
@@ -797,69 +837,16 @@ curl -X POST http://localhost:5000/verify/google/subscription \
   -d '{ "token": "<purchaseToken>", "productId": "premium_monthly" }'
 ```
 
-See [`samples/StoreBridge.Sample.Web/README.md`](samples/StoreBridge.Sample.Web/README.md) for tunneling instructions and step-by-step webhook validation.
+See [`samples/StoreBridge.Sample.Web/README.md`](https://github.com/jjalcantara-dev/StoreBridge/blob/main/samples/StoreBridge.Sample.Web/README.md) for tunneling instructions and step-by-step webhook validation.
 
 ---
 
-## Building from source
+## Changelog and contributing
 
-```bash
-git clone https://github.com/jjalcantara-dev/StoreBridge.git
-cd StoreBridge
+- What changed in each version: [CHANGELOG.md](https://github.com/jjalcantara-dev/StoreBridge/blob/main/CHANGELOG.md).
+- Building from source, running the tests and releasing: [CONTRIBUTING.md](https://github.com/jjalcantara-dev/StoreBridge/blob/main/CONTRIBUTING.md).
 
-# Restore + build (net10.0)
-dotnet restore
-dotnet build --configuration Release
-
-# Run the full test suite
-dotnet test --configuration Release
-
-# Just one project
-dotnet test tests/StoreBridge.Apple.Tests   --configuration Release
-dotnet test tests/StoreBridge.Android.Tests --configuration Release
-
-# Produce NuGet packages locally
-dotnet pack --configuration Release /p:Version=1.0.0-local --output ./nupkgs
-```
-
-Repo layout:
-
-```
-src/
-  StoreBridge/             Core abstractions, models, enums
-  StoreBridge.Apple/       App Store Server API v1 + Server Notifications v2
-  StoreBridge.Android/     Android Publisher v3 + Pub/Sub
-tests/
-  StoreBridge.Apple.Tests/    xUnit v3 + FakeHttpMessageHandler
-  StoreBridge.Android.Tests/  xUnit v3 + NSubstitute
-samples/
-  StoreBridge.Sample.Web/  Minimal ASP.NET Core harness
-```
-
-All tests are unit tests — there are no integration tests against real Apple/Google APIs. Use the sample web app for end-to-end validation with sandbox credentials.
-
----
-
-## Releasing new versions
-
-Releases are fully automated via GitHub Actions ([`.github/workflows/publish.yml`](.github/workflows/publish.yml)). Push a semver git tag and the workflow restores, builds, tests, packs all three NuGet packages, and pushes them to NuGet.org using [**Trusted Publishing**](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): the job trades its GitHub OIDC token for a short-lived NuGet API key, so no long-lived key is stored in the repository.
-
-One-time setup:
-
-1. On nuget.org → your account → **Trusted Publishing**, add a policy for this repository: owner `jjalcantara-dev`, repository `StoreBridge`, workflow file `publish.yml`.
-2. In GitHub → repository **Settings → Secrets and variables → Actions**, add `NUGET_USER` with your nuget.org **profile name** (not your email).
-3. After the first successful release, delete the old `NUGET_API_KEY` secret and revoke that key on nuget.org.
-
-Then:
-
-```bash
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-The workflow extracts the version from the tag (`v1.2.0` → `1.2.0`) and passes it to both the build (assembly versions) and the pack (package version), so you don't edit `Version` in source.
-
-> **Logging.** The verifiers never log full purchase tokens or transaction IDs: they appear masked (`abcd…wxyz (len 150)`), enough to correlate log lines without leaking the identifier.
+All tests are unit tests (no calls to live Apple/Google APIs). They include a notification genuinely signed by Apple, verified against the real Apple Root CA - G3 chain, and seeded fuzz tests of every webhook entry point.
 
 ---
 
@@ -871,4 +858,4 @@ Apple, App Store, iOS, and StoreKit are trademarks of Apple Inc., registered in 
 
 ## License
 
-[MIT](LICENSE). Use it however you want.
+[MIT](https://github.com/jjalcantara-dev/StoreBridge/blob/main/LICENSE). Use it however you want.

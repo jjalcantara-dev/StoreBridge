@@ -74,15 +74,32 @@ public static class AndroidServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configure);
 
         services.Configure(configure);
+        return AddWebhooksCore(services);
+    }
+
+    /// <summary>Binds <see cref="AndroidWebhookAuthenticatorOptions"/> from an <see cref="IConfiguration"/> section.</summary>
+    public static IServiceCollection AddAndroidWebhooks(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.Configure<AndroidWebhookAuthenticatorOptions>(configuration);
+        return AddWebhooksCore(services);
+    }
+
+    private static IServiceCollection AddWebhooksCore(IServiceCollection services)
+    {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AndroidWebhookAuthenticatorOptions>, AndroidWebhookAuthenticatorOptionsValidator>());
-        services.AddSingleton<AndroidWebhookParser>();
-        services.AddSingleton<IWebhookParser>(sp => sp.GetRequiredService<AndroidWebhookParser>());
-        services.AddSingleton<AndroidInAppPurchaseWebhookParser>();
-        services.AddSingleton<IInAppPurchaseWebhookParser>(sp => sp.GetRequiredService<AndroidInAppPurchaseWebhookParser>());
-        services.AddSingleton(sp => new AndroidWebhookAuthenticator(
+        services.TryAddSingleton<AndroidWebhookParser>();
+        TryAddForwardedSingleton<IWebhookParser, AndroidWebhookParser>(services);
+        services.TryAddSingleton<AndroidInAppPurchaseWebhookParser>();
+        TryAddForwardedSingleton<IInAppPurchaseWebhookParser, AndroidInAppPurchaseWebhookParser>(services);
+        services.TryAddSingleton(sp => new AndroidWebhookAuthenticator(
             sp.GetRequiredService<IOptions<AndroidWebhookAuthenticatorOptions>>()));
-        services.AddSingleton<IWebhookAuthenticator>(sp => sp.GetRequiredService<AndroidWebhookAuthenticator>());
+        TryAddForwardedSingleton<IWebhookAuthenticator, AndroidWebhookAuthenticator>(services);
         return services;
     }
 
@@ -90,10 +107,10 @@ public static class AndroidServiceCollectionExtensions
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AndroidSubscriptionOptions>, AndroidSubscriptionOptionsValidator>());
-        services.AddSingleton(sp => new AndroidSubscriptionVerifier(
+        services.TryAddSingleton(sp => new AndroidSubscriptionVerifier(
             sp.GetRequiredService<IOptions<AndroidSubscriptionOptions>>(),
-            sp.GetRequiredService<ILogger<AndroidSubscriptionVerifier>>()));
-        services.AddSingleton<ISubscriptionVerifier>(sp => sp.GetRequiredService<AndroidSubscriptionVerifier>());
+            sp.GetService<ILogger<AndroidSubscriptionVerifier>>()));
+        TryAddForwardedSingleton<ISubscriptionVerifier, AndroidSubscriptionVerifier>(services);
         return services;
     }
 
@@ -101,10 +118,20 @@ public static class AndroidServiceCollectionExtensions
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IValidateOptions<AndroidInAppPurchaseOptions>, AndroidInAppPurchaseOptionsValidator>());
-        services.AddSingleton(sp => new AndroidInAppPurchaseVerifier(
+        services.TryAddSingleton(sp => new AndroidInAppPurchaseVerifier(
             sp.GetRequiredService<IOptions<AndroidInAppPurchaseOptions>>(),
-            sp.GetRequiredService<ILogger<AndroidInAppPurchaseVerifier>>()));
-        services.AddSingleton<IInAppPurchaseVerifier>(sp => sp.GetRequiredService<AndroidInAppPurchaseVerifier>());
+            sp.GetService<ILogger<AndroidInAppPurchaseVerifier>>()));
+        TryAddForwardedSingleton<IInAppPurchaseVerifier, AndroidInAppPurchaseVerifier>(services);
         return services;
+    }
+
+    // Typed Func<IServiceProvider, TImpl> preserves TImpl as the descriptor's implementation type so
+    // TryAddEnumerable deduplicates repeated Android registrations without colliding with Apple's.
+    private static void TryAddForwardedSingleton<TInterface, TImpl>(IServiceCollection services)
+        where TInterface : class
+        where TImpl : class, TInterface
+    {
+        Func<IServiceProvider, TImpl> factory = static sp => sp.GetRequiredService<TImpl>();
+        services.TryAddEnumerable(new ServiceDescriptor(typeof(TInterface), factory, ServiceLifetime.Singleton));
     }
 }

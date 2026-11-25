@@ -25,9 +25,6 @@ internal sealed class LastTransaction
     [JsonPropertyName("originalTransactionId")]
     public string? OriginalTransactionId { get; set; }
 
-    [JsonPropertyName("productId")]
-    public string? ProductId { get; set; }
-
     [JsonPropertyName("status")]
     public int Status { get; set; }
 
@@ -87,6 +84,12 @@ internal sealed class DecodedTransactionInfo
 
     [JsonPropertyName("revocationReason")]
     public int? RevocationReason { get; set; }
+
+    [JsonPropertyName("appAccountToken")]
+    public string? AppAccountToken { get; set; }
+
+    [JsonPropertyName("signedDate")]
+    public long? SignedDate { get; set; }
 }
 
 internal sealed class DecodedRenewalInfo
@@ -97,14 +100,17 @@ internal sealed class DecodedRenewalInfo
     [JsonPropertyName("autoRenewProductId")]
     public string? AutoRenewProductId { get; set; }
 
-    [JsonPropertyName("expirationReason")]
-    public string? ExpirationReason { get; set; }
+    [JsonPropertyName("expirationIntent")]
+    public int? ExpirationIntent { get; set; }
 
     [JsonPropertyName("isInBillingRetryPeriod")]
     public bool? IsInBillingRetryPeriod { get; set; }
 
     [JsonPropertyName("gracePeriodExpiresDate")]
     public long? GracePeriodExpiresDate { get; set; }
+
+    [JsonPropertyName("signedDate")]
+    public long? SignedDate { get; set; }
 }
 
 internal sealed class AppStoreTransactionResponse

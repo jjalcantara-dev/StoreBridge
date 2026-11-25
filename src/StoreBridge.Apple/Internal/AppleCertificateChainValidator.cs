@@ -28,15 +28,30 @@ internal static class AppleCertificateChainValidator
     /// <summary>Marker extension present on the Apple Worldwide Developer Relations intermediate CA.</summary>
     internal const string IntermediateMarkerOid = "1.2.840.113635.100.6.2.1";
 
+    /// <summary>Upper bound on base64url JWT header length before decoding (prevents allocation DoS).</summary>
+    private const int MaxHeaderLength = 64 * 1024;
+
+    /// <summary>Upper bound on a single base64 DER certificate entry in x5c.</summary>
+    private const int MaxX5cEntryLength = 16 * 1024;
+
+    /// <summary>Expected IEEE P1363 signature length for ES256 (P-256: 32-byte r || 32-byte s).</summary>
+    private const int Es256SignatureLength = 64;
+
     /// <summary>
     /// Validates the certificate chain and ECDSA signature of an Apple-signed JWT.
     /// </summary>
     /// <param name="jwt">The full signed JWT string (header.payload.signature).</param>
     /// <param name="trustedRoots">The trusted Apple Root CA certificates to anchor the chain.</param>
+    /// <param name="verificationTimeUtc">Instant at which certificate validity is evaluated (normally now).</param>
+    /// <param name="enableOnlineRevocationCheck">When true, performs online OCSP/CRL revocation check after root pinning succeeds.</param>
     /// <exception cref="WebhookAuthenticationException">Thrown when chain or signature validation fails.</exception>
-    internal static void ValidateSignature(string jwt, IReadOnlyCollection<X509Certificate2> trustedRoots)
+    internal static void ValidateSignature(
+        string jwt,
+        IReadOnlyCollection<X509Certificate2> trustedRoots,
+        DateTime verificationTimeUtc,
+        bool enableOnlineRevocationCheck = false)
     {
-        var parts = jwt.Split('.');
+        var parts = jwt.Split('.', 4);
         if (parts.Length != 3)
             throw new WebhookAuthenticationException("Invalid JWT format: expected 3 parts.");
 
@@ -44,12 +59,21 @@ internal static class AppleCertificateChainValidator
         try
         {
             ValidateMarkerExtensions(certs);
-            ValidateChain(certs, trustedRoots);
+            ValidateChain(certs, trustedRoots, verificationTimeUtc, enableOnlineRevocationCheck);
 
             using var publicKey = certs[0].GetECDsaPublicKey()
                 ?? throw new WebhookAuthenticationException("Leaf certificate does not contain an EC public key.");
 
+            if (publicKey.KeySize != 256)
+                throw new WebhookAuthenticationException(
+                    $"Leaf certificate EC key size must be 256 bits (P-256) for ES256; got {publicKey.KeySize} bits.");
+
             VerifyJwtSignature(parts[0], parts[1], parts[2], publicKey);
+        }
+        catch (CryptographicException ex)
+        {
+            // Malformed keys/certificates from the attacker-controlled x5c must surface as an auth failure
+            throw new WebhookAuthenticationException($"Apple notification certificate could not be processed: {ex.Message}", ex);
         }
         finally
         {
@@ -60,6 +84,9 @@ internal static class AppleCertificateChainValidator
 
     private static string[] ParseX5c(string headerBase64Url)
     {
+        if (headerBase64Url.Length > MaxHeaderLength)
+            throw new WebhookAuthenticationException("Apple notification JWT header exceeds maximum allowed size.");
+
         byte[] headerBytes;
         try
         {
@@ -87,7 +114,7 @@ internal static class AppleCertificateChainValidator
                 throw new WebhookAuthenticationException("Apple notification JWT header is not a JSON object.");
 
             var alg = root.TryGetProperty("alg", out var algProp) && algProp.ValueKind == JsonValueKind.String
-                ? algProp.GetString()
+                ? ReadString(algProp)
                 : null;
             if (!string.Equals(alg, "ES256", StringComparison.Ordinal))
                 throw new WebhookAuthenticationException(
@@ -104,11 +131,24 @@ internal static class AppleCertificateChainValidator
 
             var certs = x5cProp.EnumerateArray()
                 .Select(e => e.ValueKind == JsonValueKind.String
-                    ? e.GetString()!
+                    ? ReadString(e)
                     : throw new WebhookAuthenticationException("Non-string entry in x5c array."))
                 .ToArray();
 
             return certs;
+        }
+    }
+
+    private static string ReadString(JsonElement element)
+    {
+        try
+        {
+            return element.GetString()!;
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. an escaped lone surrogate that cannot be transcoded to UTF-16
+            throw new WebhookAuthenticationException("Apple notification JWT header contains an invalid string.", ex);
         }
     }
 
@@ -119,7 +159,12 @@ internal static class AppleCertificateChainValidator
         {
             // x5c values are standard base64-encoded DER (not base64url)
             foreach (var entry in x5c)
+            {
+                if (entry.Length > MaxX5cEntryLength)
+                    throw new WebhookAuthenticationException("Apple notification x5c certificate entry exceeds maximum allowed size.");
+
                 certs.Add(X509CertificateLoader.LoadCertificate(Convert.FromBase64String(entry)));
+            }
             return certs;
         }
         catch (Exception ex) when (ex is FormatException or CryptographicException)
@@ -141,7 +186,11 @@ internal static class AppleCertificateChainValidator
                 $"Apple intermediate certificate is missing the WWDR marker extension ({IntermediateMarkerOid}).");
     }
 
-    private static void ValidateChain(List<X509Certificate2> certs, IReadOnlyCollection<X509Certificate2> trustedRoots)
+    private static void ValidateChain(
+        List<X509Certificate2> certs,
+        IReadOnlyCollection<X509Certificate2> trustedRoots,
+        DateTime verificationTimeUtc,
+        bool enableOnlineRevocationCheck)
     {
         var leaf = certs[0];
         var intermediate = certs[1];
@@ -153,34 +202,65 @@ internal static class AppleCertificateChainValidator
         string? lastErrors = null;
         foreach (var root in trustedRoots)
         {
-            using var chain = new X509Chain();
-            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(root);
-            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-            // Never follow AIA URLs from attacker-supplied certificates (blind SSRF / latency).
-            chain.ChainPolicy.DisableCertificateDownloads = true;
-            // Only the intermediate from x5c is offered; x5c[2] (the root Apple embeds) is ignored
-            // on purpose — trust comes exclusively from the pinned roots.
-            chain.ChainPolicy.ExtraStore.Add(intermediate);
-
-            if (chain.Build(leaf))
+            if (BuildAndCheckChain(leaf, intermediate, root, verificationTimeUtc, X509RevocationMode.NoCheck, out var errors))
             {
-                // The chain must be exactly leaf → x5c intermediate → pinned root.
-                if (chain.ChainElements.Count == ExpectedChainLength &&
-                    chain.ChainElements[1].Certificate.RawDataMemory.Span.SequenceEqual(intermediate.RawDataMemory.Span))
-                {
+                if (!enableOnlineRevocationCheck)
                     return;
-                }
 
-                lastErrors = "chain did not pass through the x5c intermediate certificate";
+                // Only query OCSP/CRL *after* the chain is cryptographically anchored to a trusted root
+                // so attacker-supplied certificates can never trigger outbound requests (blind SSRF).
+                if (BuildAndCheckChain(leaf, intermediate, root, verificationTimeUtc, X509RevocationMode.Online, out var revErrors))
+                    return;
+
+                lastErrors = revErrors;
                 continue;
             }
 
-            lastErrors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
+            lastErrors = errors;
         }
 
         throw new WebhookAuthenticationException(
             $"Apple certificate chain validation failed: {lastErrors ?? "unknown error"}");
+    }
+
+    private static bool BuildAndCheckChain(
+        X509Certificate2 leaf,
+        X509Certificate2 intermediate,
+        X509Certificate2 root,
+        DateTime verificationTimeUtc,
+        X509RevocationMode revocationMode,
+        out string errors)
+    {
+        using var chain = new X509Chain();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(root);
+        chain.ChainPolicy.RevocationMode = revocationMode;
+        if (revocationMode != X509RevocationMode.NoCheck)
+            chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+        // Never follow AIA URLs from attacker-supplied certificates (blind SSRF / latency).
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.VerificationTimeIgnored = false;
+        chain.ChainPolicy.VerificationTime = verificationTimeUtc;
+        // Only the intermediate from x5c is offered; x5c[2] (the root Apple embeds) is ignored
+        // on purpose — trust comes exclusively from the pinned roots.
+        chain.ChainPolicy.ExtraStore.Add(intermediate);
+
+        if (chain.Build(leaf))
+        {
+            // The chain must be exactly leaf → x5c intermediate → pinned root.
+            if (chain.ChainElements.Count == ExpectedChainLength &&
+                chain.ChainElements[1].Certificate.RawDataMemory.Span.SequenceEqual(intermediate.RawDataMemory.Span))
+            {
+                errors = string.Empty;
+                return true;
+            }
+
+            errors = "chain did not pass through the x5c intermediate certificate";
+            return false;
+        }
+
+        errors = string.Join("; ", chain.ChainStatus.Select(s => s.StatusInformation.Trim()));
+        return false;
     }
 
     private static void VerifyJwtSignature(string headerB64, string payloadB64, string signatureB64, ECDsa key)
@@ -199,7 +279,8 @@ internal static class AppleCertificateChainValidator
             throw new WebhookAuthenticationException("Apple notification signature is not valid base64url.", ex);
         }
 
-        if (!key.VerifyData(data, signature, HashAlgorithmName.SHA256,
+        if (signature.Length != Es256SignatureLength ||
+            !key.VerifyData(data, signature, HashAlgorithmName.SHA256,
                 DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
             throw new WebhookAuthenticationException(
                 "Apple notification signature is invalid. The payload may have been tampered with.");

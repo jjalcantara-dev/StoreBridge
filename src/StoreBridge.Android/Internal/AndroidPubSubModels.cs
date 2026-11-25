@@ -32,6 +32,7 @@ internal sealed class DeveloperNotification
     public string? PackageName { get; set; }
 
     [JsonPropertyName("eventTimeMillis")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public long? EventTimeMillis { get; set; }
 
     [JsonPropertyName("subscriptionNotification")]

@@ -20,7 +20,7 @@ builder.Services.AddAppleWebhooks(builder.Configuration.GetSection("Apple:Webhoo
 // Google — bind from the "Google" configuration section.
 builder.Services.AddAndroidSubscriptions(builder.Configuration.GetSection("Google"));
 builder.Services.AddAndroidInAppPurchases(builder.Configuration.GetSection("Google"));
-builder.Services.AddAndroidWebhooks(o => builder.Configuration.GetSection("Google:Webhook").Bind(o));
+builder.Services.AddAndroidWebhooks(builder.Configuration.GetSection("Google:Webhook"));
 // Note: the webhook authenticators validate their options on first use — an empty Apple:Webhook:BundleId or
 // Google:Webhook:ExpectedServiceAccountEmail fails with an OptionsValidationException explaining what to set.
 
@@ -48,13 +48,15 @@ app.MapPost("/webhooks/apple", async (
     HttpRequest request,
     AppleWebhookAuthenticator authenticator,
     AppleWebhookParser parser,
-    ILogger<Program> logger) =>
+    ILogger<Program> logger,
+    CancellationToken ct) =>
 {
-    var body = await new StreamReader(request.Body).ReadToEndAsync();
+    using var reader = new StreamReader(request.Body, leaveOpen: true);
+    var body = await reader.ReadToEndAsync(ct);
 
     try
     {
-        await authenticator.ValidateAsync(body);
+        await authenticator.ValidateAsync(body, cancellationToken: ct);
     }
     catch (WebhookAuthenticationException ex)
     {
@@ -67,7 +69,7 @@ app.MapPost("/webhooks/apple", async (
         return Results.BadRequest();
     }
 
-    var notification = await parser.ParseAsync(body);
+    var notification = await parser.ParseAsync(body, ct);
     logger.LogInformation("Apple notification {Id}: {Event} ({Raw})",
         notification.NotificationId, notification.EventType, notification.RawEventType);
     return Results.Ok(notification);
@@ -78,13 +80,15 @@ app.MapPost("/webhooks/google", async (
     AndroidWebhookAuthenticator authenticator,
     AndroidWebhookParser subscriptionParser,
     AndroidInAppPurchaseWebhookParser purchaseParser,
-    ILogger<Program> logger) =>
+    ILogger<Program> logger,
+    CancellationToken ct) =>
 {
-    var body = await new StreamReader(request.Body).ReadToEndAsync();
+    using var reader = new StreamReader(request.Body, leaveOpen: true);
+    var body = await reader.ReadToEndAsync(ct);
 
     try
     {
-        await authenticator.ValidateAsync(body, request.Headers.Authorization);
+        await authenticator.ValidateAsync(body, request.Headers.Authorization, ct);
     }
     catch (WebhookAuthenticationException ex)
     {

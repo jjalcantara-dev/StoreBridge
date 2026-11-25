@@ -26,4 +26,19 @@ public sealed class AppleWebhookAuthenticatorOptions
     /// Apple sends them to your sandbox URL, which is often the same endpoint as production.
     /// </summary>
     public bool AllowSandbox { get; set; } = true;
+
+    /// <summary>
+    /// When <see langword="true"/>, performs online OCSP/CRL revocation checks on Apple's signing certificate
+    /// chain after verifying marker OIDs and custom-root anchoring. Default: <see langword="false"/>
+    /// (avoids outbound network latency on every webhook).
+    /// </summary>
+    public bool EnableOnlineRevocationCheck { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, evaluates each JWS certificate chain's validity window at its own
+    /// <c>signedDate</c> (when present) instead of the current UTC time — matching Apple's official App Store
+    /// Server Libraries so retried deliveries or older nested transactions signed before a leaf rotation
+    /// remain verifiable. Default: <see langword="false"/>.
+    /// </summary>
+    public bool ValidateCertificateAtSignedDate { get; set; }
 }

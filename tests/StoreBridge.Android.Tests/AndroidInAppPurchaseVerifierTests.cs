@@ -249,4 +249,43 @@ public sealed class AndroidInAppPurchaseVerifierTests
         Assert.False(result.IsVerified);
         Assert.Contains(nameof(AndroidOptions.PackageName), result.ErrorMessage);
     }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_NullProductIdWithEmptyLineItems_ReturnsFailure()
+    {
+        var emptyPurchase = new ProductPurchaseV2
+        {
+            PurchaseStateContext = new PurchaseStateContext { PurchaseState = "PURCHASED" },
+            ProductLineItem = []
+        };
+
+        var result = await Build(ClientReturning(emptyPurchase))
+            .VerifyPurchaseAsync("token-001", productId: null);
+
+        Assert.False(result.IsVerified);
+    }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_MalformedJsonCredentials_ReturnsFailure()
+    {
+        using var verifier = new AndroidInAppPurchaseVerifier(new AndroidInAppPurchaseOptions
+        {
+            PackageName = "com.example.app",
+            CredentialsBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{not json"))
+        });
+
+        var result = await verifier.VerifyPurchaseAsync("token-001", productId: "coins_100");
+
+        Assert.False(result.IsVerified);
+        Assert.Contains("credentials", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task VerifyPurchaseAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        var verifier = Build(ClientReturning(PurchasedProduct()));
+        verifier.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => verifier.VerifyPurchaseAsync("token-001"));
+    }
 }

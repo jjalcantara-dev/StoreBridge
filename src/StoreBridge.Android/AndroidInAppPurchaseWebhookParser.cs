@@ -23,7 +23,10 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
     /// <param name="cancellationToken">Cancellation token.</param>
     public Task<InAppPurchaseNotification> ParseAsync(string rawBody, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var (notification, messageId) = AndroidPubSubReader.Parse(rawBody);
+        var eventAt = AndroidPubSubReader.FromUnixTimeMilliseconds(notification.EventTimeMillis);
 
         // testNotification is a wiring check sent from Play Console; it has no purchase payload
         if (notification.TestNotification != null && notification.OneTimeProductNotification == null
@@ -35,17 +38,19 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
                 EventType = InAppPurchaseEventType.Test,
                 RawEventType = "TEST",
                 NotificationId = messageId,
-                EventAt = notification.EventTimeMillis.HasValue
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
-                    : null,
+                EventAt = eventAt,
                 IsSandbox = false
             });
         }
 
-        // voidedPurchaseNotification covers refunds/chargebacks for both subscriptions and one-time purchases.
-        // It carries no SKU — the order ID is in OrderId; look the purchase up by PurchaseId (token).
+        // voidedPurchaseNotification covers refunds/chargebacks: subscriptions (productType == 1) belong to
+        // AndroidWebhookParser; one-time purchases (productType == 2, or unspecified 0) are handled here.
         if (notification.VoidedPurchaseNotification is { } voided)
         {
+            if (voided.ProductType == VoidedProductType.Subscription)
+                throw new FormatException(
+                    "Voided subscription notifications (productType = 1) are handled by AndroidWebhookParser.");
+
             return Task.FromResult(new InAppPurchaseNotification
             {
                 Store = Store,
@@ -54,9 +59,7 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
                 NotificationId = messageId,
                 PurchaseId = voided.PurchaseToken ?? string.Empty,
                 OrderId = voided.OrderId ?? string.Empty,
-                EventAt = notification.EventTimeMillis.HasValue
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
-                    : null,
+                EventAt = eventAt,
                 IsSandbox = false
             });
         }
@@ -72,9 +75,7 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
                 NotificationId = messageId,
                 OrderId = review.OrderId ?? string.Empty,
                 RefundReviewToken = review.PendingRefundToken ?? string.Empty,
-                EventAt = notification.EventTimeMillis.HasValue
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
-                    : null,
+                EventAt = eventAt,
                 IsSandbox = false
             });
         }
@@ -91,9 +92,7 @@ public sealed class AndroidInAppPurchaseWebhookParser : IInAppPurchaseWebhookPar
             NotificationId = messageId,
             PurchaseId = product.PurchaseToken ?? string.Empty,
             ProductId = product.Sku ?? string.Empty,
-            EventAt = notification.EventTimeMillis.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(notification.EventTimeMillis.Value)
-                : null,
+            EventAt = eventAt,
             IsSandbox = false
         };
 

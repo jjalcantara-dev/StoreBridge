@@ -70,9 +70,16 @@ public sealed class AndroidWebhookAuthenticator : IWebhookAuthenticator
                 "Missing Authorization Bearer token. Google Pub/Sub push requests must include an OIDC token " +
                 "in the Authorization header. Ensure your Pub/Sub subscription is configured with authentication enabled.");
 
-        var token = bearerToken.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? bearerToken["Bearer ".Length..]
-            : bearerToken;
+        var trimmed = bearerToken.Trim();
+        var token = trimmed.StartsWith("Bearer", StringComparison.OrdinalIgnoreCase) &&
+                    (trimmed.Length == "Bearer".Length || char.IsWhiteSpace(trimmed["Bearer".Length]))
+            ? trimmed["Bearer".Length..].Trim()
+            : trimmed;
+
+        if (string.IsNullOrWhiteSpace(token))
+            throw new WebhookAuthenticationException(
+                "Missing Authorization Bearer token. Google Pub/Sub push requests must include an OIDC token " +
+                "in the Authorization header. Ensure your Pub/Sub subscription is configured with authentication enabled.");
 
         GoogleJsonWebSignature.Payload payload;
         try
@@ -95,7 +102,17 @@ public sealed class AndroidWebhookAuthenticator : IWebhookAuthenticator
 
         if (!string.IsNullOrWhiteSpace(_options.ExpectedPackageName))
         {
-            var (notification, _) = AndroidPubSubReader.Parse(rawBody);
+            DeveloperNotification notification;
+            try
+            {
+                (notification, _) = AndroidPubSubReader.Parse(rawBody);
+            }
+            catch (Exception ex) when (ex is ArgumentException or FormatException)
+            {
+                throw new WebhookAuthenticationException(
+                    $"Pub/Sub notification body could not be parsed to verify package name: {ex.Message}", ex);
+            }
+
             if (!string.Equals(notification.PackageName, _options.ExpectedPackageName, StringComparison.Ordinal))
                 throw new WebhookAuthenticationException(
                     $"Notification is for package '{notification.PackageName}', expected '{_options.ExpectedPackageName}'.");

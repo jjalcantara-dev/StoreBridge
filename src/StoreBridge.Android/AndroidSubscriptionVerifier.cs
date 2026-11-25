@@ -13,16 +13,23 @@ namespace StoreBridge.Android;
 /// <summary>
 /// Verifies Google Play subscriptions using the Android Publisher API v3 subscriptionsv2 endpoint.
 /// </summary>
-public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
+public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier, IDisposable
 {
     private readonly AndroidSubscriptionOptions _options;
-    private readonly Lazy<IAndroidSubscriptionsv2> _client;
     private readonly ILogger<AndroidSubscriptionVerifier> _logger;
+    private readonly Lock _clientLock = new();
+    private IAndroidSubscriptionsv2? _client;
+    private AndroidPublisherService? _ownedService;
+    private bool _disposed;
 
     /// <inheritdoc />
     public Store Store => Store.Android;
 
-    /// <summary>Creates a new verifier using the provided options.</summary>
+    /// <summary>
+    /// Creates a new verifier using the provided options.
+    /// When <paramref name="service"/> is <c>null</c>, an internal <see cref="AndroidPublisherService"/> is created
+    /// lazily and disposed by <see cref="Dispose"/>.
+    /// </summary>
     /// <param name="options">Google Play API configuration.</param>
     /// <param name="service">Optional pre-built service (useful for testing).</param>
     /// <param name="logger">Optional logger; falls back to <see cref="NullLogger{T}"/>.</param>
@@ -33,23 +40,58 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<AndroidSubscriptionVerifier>.Instance;
-        _client = service != null
-            ? new Lazy<IAndroidSubscriptionsv2>(() => new GoogleSubscriptionsv2Adapter(service))
-            : new Lazy<IAndroidSubscriptionsv2>(() => new GoogleSubscriptionsv2Adapter(AndroidPublisherFactory.Create(_options.CredentialsBase64)),
-                LazyThreadSafetyMode.PublicationOnly);
+        if (service != null)
+            _client = new GoogleSubscriptionsv2Adapter(service);
     }
 
     /// <summary>DI-friendly constructor that resolves options from <see cref="IOptions{TOptions}"/>.</summary>
     internal AndroidSubscriptionVerifier(
         IOptions<AndroidSubscriptionOptions> options,
-        ILogger<AndroidSubscriptionVerifier> logger)
+        ILogger<AndroidSubscriptionVerifier>? logger)
         : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), service: null, logger) { }
 
     internal AndroidSubscriptionVerifier(AndroidSubscriptionOptions options, IAndroidSubscriptionsv2 client)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = NullLogger<AndroidSubscriptionVerifier>.Instance;
-        _client = new Lazy<IAndroidSubscriptionsv2>(() => client);
+        _client = client ?? throw new ArgumentNullException(nameof(client));
+    }
+
+    private IAndroidSubscriptionsv2 GetClient()
+    {
+        var existing = Volatile.Read(ref _client);
+        if (existing is not null)
+            return existing;
+
+        lock (_clientLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_client is not null)
+                return _client;
+
+            var service = AndroidPublisherFactory.Create(_options.CredentialsBase64, _options.RequestTimeout);
+            _ownedService = service;
+            var adapter = new GoogleSubscriptionsv2Adapter(service);
+            Volatile.Write(ref _client, adapter);
+            return adapter;
+        }
+    }
+
+    /// <summary>Disposes the internal <see cref="AndroidPublisherService"/> if one was created by this instance.</summary>
+    public void Dispose()
+    {
+        AndroidPublisherService? toDispose;
+        lock (_clientLock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            toDispose = _ownedService;
+            _ownedService = null;
+        }
+
+        toDispose?.Dispose();
     }
 
     /// <summary>
@@ -67,6 +109,8 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
         string? productId = null,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (string.IsNullOrEmpty(productId))
             return Task.FromResult(SubscriptionVerificationResult.Failure(
                 Store, "productId (subscription ID) is required for Google Play verification."));
@@ -92,6 +136,7 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
         string purchaseToken,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (string.IsNullOrWhiteSpace(packageName))
@@ -103,8 +148,9 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
 
         try
         {
+            var client = GetClient();
             var sub = await AndroidRetryHelper.ExecuteAsync(
-                ct => _client.Value.GetAsync(packageName, purchaseToken, ct),
+                ct => client.GetAsync(packageName, purchaseToken, ct),
                 _options.MaxRetries,
                 cancellationToken);
             return MapToResult(sub, subscriptionId, purchaseToken);
@@ -148,7 +194,9 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
             _logger.LogError(ex, "Google OAuth token request failed — check the service account key in AndroidOptions.CredentialsBase64");
             return SubscriptionVerificationResult.Failure(Store, $"Google credentials error: {ex.Message}");
         }
-        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException
+                                       or ArgumentException or FormatException
+                                       or System.Text.Json.JsonException or Newtonsoft.Json.JsonException)
         {
             // Malformed base64 or a JSON that is not a service-account key (only when constructed without DI validation)
             _logger.LogError(ex, "Google credentials could not be loaded — check AndroidOptions.CredentialsBase64");
@@ -196,6 +244,9 @@ public sealed class AndroidSubscriptionVerifier : ISubscriptionVerifier
             CurrencyCode = price?.CurrencyCode ?? string.Empty,
             PriceDecimal = PriceConverter.FromGoogleMicros(priceMicros),
             CancelledByUser = sub.CanceledStateContext?.UserInitiatedCancellation != null,
+            IsAcknowledged = sub.AcknowledgementState == "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+            LinkedPurchaseToken = sub.LinkedPurchaseToken ?? string.Empty,
+            ExternalAccountId = sub.ExternalAccountIdentifiers?.ObfuscatedExternalAccountId ?? string.Empty,
             IsSandbox = sub.TestPurchase != null
         };
     }

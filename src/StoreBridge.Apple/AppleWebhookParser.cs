@@ -20,6 +20,8 @@ public sealed class AppleWebhookParser : IWebhookParser
     /// <param name="cancellationToken">Cancellation token.</param>
     public Task<SubscriptionNotification> ParseAsync(string rawBody, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (string.IsNullOrWhiteSpace(rawBody))
             throw new ArgumentException("Webhook body cannot be empty.", nameof(rawBody));
 
@@ -50,12 +52,8 @@ public sealed class AppleWebhookParser : IWebhookParser
             SubscriptionId = transactionInfo?.OriginalTransactionId ?? string.Empty,
             ProductId = transactionInfo?.ProductId ?? string.Empty,
             Status = AppleStatusMapper.Map(outerPayload.Data?.Status, autoRenewOff: renewalInfo?.AutoRenewStatus == 0),
-            ExpiresAt = transactionInfo?.ExpiresDate.HasValue == true
-                ? DateTimeOffset.FromUnixTimeMilliseconds(transactionInfo.ExpiresDate!.Value)
-                : null,
-            EventAt = outerPayload.SignedDate.HasValue
-                ? DateTimeOffset.FromUnixTimeMilliseconds(outerPayload.SignedDate.Value)
-                : null,
+            ExpiresAt = AppleJwtHelper.FromUnixTimeMilliseconds(transactionInfo?.ExpiresDate),
+            EventAt = AppleJwtHelper.FromUnixTimeMilliseconds(outerPayload.SignedDate),
             IsSandbox = AppleJwtHelper.IsNonProduction(environment)
         };
 
@@ -68,7 +66,8 @@ public sealed class AppleWebhookParser : IWebhookParser
         "DID_RENEW" => NotificationEventType.Renewed,
         "SUBSCRIBED" => NotificationEventType.Created,
         "DID_CHANGE_RENEWAL_STATUS" when subtype == "AUTO_RENEW_DISABLED" => NotificationEventType.AutoRenewDisabled,
-        "DID_CHANGE_RENEWAL_STATUS" => NotificationEventType.AutoRenewEnabled,
+        "DID_CHANGE_RENEWAL_STATUS" when subtype == "AUTO_RENEW_ENABLED" => NotificationEventType.AutoRenewEnabled,
+        "DID_CHANGE_RENEWAL_STATUS" => NotificationEventType.Other,
         "EXPIRED" => NotificationEventType.Expired,
         "DID_FAIL_TO_RENEW" when subtype == "GRACE_PERIOD" => NotificationEventType.GracePeriod,
         // No subtype: billing failed and the subscription entered billing retry without a grace period

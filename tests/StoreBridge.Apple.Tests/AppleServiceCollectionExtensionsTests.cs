@@ -174,4 +174,85 @@ public sealed class AppleServiceCollectionExtensionsTests
             () => sp.GetRequiredService<AppleSubscriptionVerifier>());
         Assert.Contains("MaxRetries", ex.Message);
     }
+
+    [Fact]
+    public void AddAppleSubscriptions_NonP256Key_ThrowsOnResolve()
+    {
+        using var p384 = ECDsa.Create(ECCurve.NamedCurves.nistP384);
+        var p384Base64 = Convert.ToBase64String(p384.ExportPkcs8PrivateKey());
+
+        var services = new ServiceCollection();
+        services.AddAppleSubscriptions(opts =>
+        {
+            opts.KeyId            = "K";
+            opts.IssuerId         = "I";
+            opts.BundleId         = "com.example.app";
+            opts.PrivateKeyBase64 = p384Base64;
+        });
+
+        using var sp = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => sp.GetRequiredService<AppleSubscriptionVerifier>());
+        Assert.Contains("P-256", ex.Message);
+    }
+
+    [Fact]
+    public void AddAppleSubscriptions_CalledTwice_DoesNotDuplicateInterfaceRegistrations()
+    {
+        var services = new ServiceCollection();
+        services.AddAppleSubscriptions(opts =>
+        {
+            opts.KeyId            = "K";
+            opts.IssuerId         = "I";
+            opts.BundleId         = "com.example.app";
+            opts.PrivateKeyBase64 = CreateEc256Key();
+        });
+        services.AddAppleSubscriptions(opts => opts.MaxRetries = 2);
+
+        using var sp = services.BuildServiceProvider();
+
+        // Also verifies resolution succeeds without calling services.AddLogging()
+        var verifiers = sp.GetServices<ISubscriptionVerifier>().ToList();
+        Assert.Single(verifiers);
+    }
+
+    [Fact]
+    public void AddAppleSubscriptions_NonPositiveRequestTimeout_ThrowsOnResolve()
+    {
+        var services = new ServiceCollection();
+        services.AddAppleSubscriptions(opts =>
+        {
+            opts.KeyId            = "K";
+            opts.IssuerId         = "I";
+            opts.BundleId         = "com.example.app";
+            opts.PrivateKeyBase64 = CreateEc256Key();
+            opts.RequestTimeout   = TimeSpan.Zero;
+        });
+
+        using var sp = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => sp.GetRequiredService<AppleSubscriptionVerifier>());
+        Assert.Contains("RequestTimeout", ex.Message);
+    }
+
+    [Fact]
+    public void AddAppleSubscriptions_ConfiguresNamedHttpClientTimeout()
+    {
+        var services = new ServiceCollection();
+        services.AddAppleSubscriptions(opts =>
+        {
+            opts.KeyId            = "K";
+            opts.IssuerId         = "I";
+            opts.BundleId         = "com.example.app";
+            opts.PrivateKeyBase64 = CreateEc256Key();
+            opts.RequestTimeout   = TimeSpan.FromSeconds(12);
+        });
+
+        using var sp = services.BuildServiceProvider();
+        var client = sp.GetRequiredService<IHttpClientFactory>().CreateClient(AppleSubscriptionVerifier.HttpClientName);
+
+        Assert.Equal(TimeSpan.FromSeconds(12), client.Timeout);
+    }
 }
