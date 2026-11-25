@@ -16,6 +16,8 @@
     <!-- Shared package metadata (PackageId, Description, PackageTags stay per-project) -->
     <Version>0.3.0</Version>
     <Authors>Jesus Jimenez</Authors>
+    <Copyright>Copyright (c) Jesus Jimenez</Copyright>
+    <PackageReleaseNotes>See https://github.com/jjalcantara-dev/StoreBridge/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/jjalcantara-dev/StoreBridge</PackageProjectUrl>
     <RepositoryUrl>https://github.com/jjalcantara-dev/StoreBridge</RepositoryUrl>

@@ -20,10 +20,9 @@
 10. [Normalized models reference](#normalized-models-reference)
 11. [Robust exception handling](#robust-exception-handling)
 12. [Sample web app](#sample-web-app)
-13. [Building from source](#building-from-source)
-14. [Releasing new versions](#releasing-new-versions)
-15. [Trademarks](#trademarks)
-16. [License](#license)
+13. [Changelog and contributing](#changelog-and-contributing)
+14. [Trademarks](#trademarks)
+15. [License](#license)
 
 ---
 
@@ -50,11 +49,11 @@ If you only need one store today, install only that package — there is no tran
 
 | Package | What's in it | NuGet |
 |---|---|---|
-| `StoreBridge` | Core abstractions and shared models (`ISubscriptionVerifier`, `IInAppPurchaseVerifier`, `IWebhookParser`, `IWebhookAuthenticator`, all DTOs and enums). No platform deps. | `StoreBridge` |
-| `StoreBridge.Apple` | App Store Server API v1 + Server Notifications v2. Pulls in `StoreBridge`, `Microsoft.IdentityModel.JsonWebTokens`, `System.IdentityModel.Tokens.Jwt`. | `StoreBridge.Apple` |
-| `StoreBridge.Android` | Google Play Developer API v3 + Pub/Sub. Pulls in `StoreBridge` and `Google.Apis.AndroidPublisher.v3`. | `StoreBridge.Android` |
+| `StoreBridge` | Core abstractions and shared models (`ISubscriptionVerifier`, `IInAppPurchaseVerifier`, `IWebhookParser`, `IWebhookAuthenticator`, all DTOs and enums). No platform deps. | [StoreBridge](https://www.nuget.org/packages/StoreBridge) |
+| `StoreBridge.Apple` | App Store Server API v1 + Server Notifications v2. Pulls in `StoreBridge` and `Microsoft.Extensions.*` abstractions only — JWTs are signed and verified with `System.Security.Cryptography`, no JWT library. | [StoreBridge.Apple](https://www.nuget.org/packages/StoreBridge.Apple) |
+| `StoreBridge.Android` | Google Play Developer API v3 + Pub/Sub. Pulls in `StoreBridge`, `Google.Apis.AndroidPublisher.v3` and `Microsoft.Extensions.*` abstractions. | [StoreBridge.Android](https://www.nuget.org/packages/StoreBridge.Android) |
 
-All packages ship symbols (`.snupkg`) and Source Link metadata so consumers can step into the source from a debugger.
+All packages target `net10.0` and ship XML docs, symbols (`.snupkg`) and Source Link metadata so you can step into the source from a debugger.
 
 ---
 
@@ -796,6 +795,10 @@ app.MapPost("/verify/apple", async (AppleSubscriptionVerifier v, VerifyRequest r
 
 You don't need a try/catch around the verifier call — the only thing that can throw is `OperationCanceledException` (your caller cancelled) or `OptionsValidationException` (DI-time config error, which you should hit before deployment).
 
+### Logging
+
+The verifiers never log full purchase tokens or transaction IDs: they appear masked (`abcd…wxyz (len 150)`), enough to correlate log lines without leaking the identifier.
+
 ---
 
 ## Sample web app
@@ -834,71 +837,16 @@ curl -X POST http://localhost:5000/verify/google/subscription \
   -d '{ "token": "<purchaseToken>", "productId": "premium_monthly" }'
 ```
 
-See [`samples/StoreBridge.Sample.Web/README.md`](samples/StoreBridge.Sample.Web/README.md) for tunneling instructions and step-by-step webhook validation.
+See [`samples/StoreBridge.Sample.Web/README.md`](https://github.com/jjalcantara-dev/StoreBridge/blob/main/samples/StoreBridge.Sample.Web/README.md) for tunneling instructions and step-by-step webhook validation.
 
 ---
 
-## Building from source
+## Changelog and contributing
 
-```bash
-git clone https://github.com/jjalcantara-dev/StoreBridge.git
-cd StoreBridge
+- What changed in each version: [CHANGELOG.md](https://github.com/jjalcantara-dev/StoreBridge/blob/main/CHANGELOG.md).
+- Building from source, running the tests and releasing: [CONTRIBUTING.md](https://github.com/jjalcantara-dev/StoreBridge/blob/main/CONTRIBUTING.md).
 
-# Restore + build (net10.0)
-dotnet restore
-dotnet build --configuration Release
-
-# Run the full test suite
-dotnet test --configuration Release
-
-# Just one project
-dotnet test tests/StoreBridge.Apple.Tests   --configuration Release
-dotnet test tests/StoreBridge.Android.Tests --configuration Release
-
-# Produce NuGet packages locally
-dotnet pack --configuration Release /p:Version=1.0.0-local --output ./nupkgs
-```
-
-Repo layout:
-
-```
-src/
-  StoreBridge/             Core abstractions, models, enums
-  StoreBridge.Apple/       App Store Server API v1 + Server Notifications v2
-  StoreBridge.Android/     Android Publisher v3 + Pub/Sub
-tests/
-  StoreBridge.Apple.Tests/    xUnit v3 + FakeHttpMessageHandler
-  StoreBridge.Android.Tests/  xUnit v3 + NSubstitute
-samples/
-  StoreBridge.Sample.Web/  Minimal ASP.NET Core harness
-```
-
-All tests are unit tests — there are no integration tests against live Apple/Google APIs. They do include a notification genuinely signed by Apple (verified against the real Apple Root CA - G3 chain) and seeded fuzz tests of every webhook entry point. Use the sample web app for end-to-end validation with sandbox credentials.
-
----
-
-## Releasing new versions
-
-See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
-
-Releases are fully automated via GitHub Actions ([`.github/workflows/publish.yml`](.github/workflows/publish.yml)). Push a semver git tag and the workflow restores, builds, tests, packs all three NuGet packages, and pushes them to NuGet.org using [**Trusted Publishing**](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): the job trades its GitHub OIDC token for a short-lived NuGet API key, so no long-lived key is stored in the repository.
-
-One-time setup:
-
-1. On nuget.org → your account → **Trusted Publishing**, add a policy for this repository: owner `jjalcantara-dev`, repository `StoreBridge`, workflow file `publish.yml`.
-2. In GitHub → repository **Settings → Secrets and variables → Actions**, add `NUGET_USER` with your nuget.org **profile name** (not your email).
-3. After the first successful release, delete the old `NUGET_API_KEY` secret and revoke that key on nuget.org.
-
-Then:
-
-```bash
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-The workflow extracts the version from the tag (`v1.2.0` → `1.2.0`) and passes it to both the build (assembly versions) and the pack (package version), so you don't edit `Version` in source.
-
-> **Logging.** The verifiers never log full purchase tokens or transaction IDs: they appear masked (`abcd…wxyz (len 150)`), enough to correlate log lines without leaking the identifier.
+All tests are unit tests (no calls to live Apple/Google APIs). They include a notification genuinely signed by Apple, verified against the real Apple Root CA - G3 chain, and seeded fuzz tests of every webhook entry point.
 
 ---
 
@@ -910,4 +858,4 @@ Apple, App Store, iOS, and StoreKit are trademarks of Apple Inc., registered in 
 
 ## License
 
-[MIT](LICENSE). Use it however you want.
+[MIT](https://github.com/jjalcantara-dev/StoreBridge/blob/main/LICENSE). Use it however you want.

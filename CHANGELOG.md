@@ -42,6 +42,12 @@ Versions follow [SemVer](https://semver.org/); while the major version is `0`, m
 - `AndroidWebhookAuthenticator` reports an unparsable body as `WebhookAuthenticationException` when
   `ExpectedPackageName` is set.
 
+### Documentation
+- The README shown on nuget.org now uses absolute links (the relative `LICENSE`, workflow and sample links were
+  broken there) and lists the real dependencies (`StoreBridge.Apple` has not used IdentityModel since 0.2.0).
+- Build/release instructions moved to `CONTRIBUTING.md`; package descriptions, tags, copyright and release notes
+  improved.
+
 ## [0.2.0] — 2026-11-25
 
 ### Security

@@ -3,8 +3,8 @@
   <!-- Common build + package metadata is in src/Directory.Build.props -->
   <PropertyGroup>
     <PackageId>StoreBridge</PackageId>
-    <Description>Core abstractions and models for Apple App Store and Google Play subscription management in .NET.</Description>
-    <PackageTags>apple;google;play;appstore;subscription;iap;in-app-purchase;billing;mobile</PackageTags>
+    <Description>Core abstractions, normalized models and enums for verifying Apple App Store and Google Play subscriptions and in-app purchases and handling their server-to-server notifications in .NET.</Description>
+    <PackageTags>apple;google;play;appstore;googleplay;subscription;iap;in-app-purchase;billing;webhooks;mobile</PackageTags>
   </PropertyGroup>
 
 </Project>

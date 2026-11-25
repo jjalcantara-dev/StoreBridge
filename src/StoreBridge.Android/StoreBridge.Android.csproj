@@ -3,8 +3,8 @@
   <!-- Common build + package metadata is in src/Directory.Build.props -->
   <PropertyGroup>
     <PackageId>StoreBridge.Android</PackageId>
-    <Description>Google Play Developer API integration for subscription verification and webhook handling in .NET.</Description>
-    <PackageTags>google;android;play;googleplay;subscription;iap;in-app-purchase;billing;mobile</PackageTags>
+    <Description>Google Play Developer API client (subscriptionsv2, productsv2) and Real-time Developer Notifications handling for .NET: verify subscriptions and one-time purchases, and authenticate Pub/Sub push webhooks (OIDC).</Description>
+    <PackageTags>google;android;googleplay;google-play-billing;play-developer-api;rtdn;pubsub;subscription;iap;in-app-purchase;webhooks;billing</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
